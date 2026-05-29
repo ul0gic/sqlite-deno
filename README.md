@@ -211,19 +211,29 @@ stateDiagram-v2
     Consequence: multi-process SERIALIZED — one accessor at a time.
   end note
 
-  classDef locked fill:#70ffaf,stroke:#111,color:#111,stroke-width:1px;
-  class SHARED,RESERVED,PENDING,EXCLUSIVE locked
+  classDef unlocked fill:#bff7d4,stroke:#111,color:#111,stroke-width:1px;
+  classDef shared fill:#70ffaf,stroke:#111,color:#111,stroke-width:1px;
+  classDef exclusive fill:#ffd479,stroke:#111,color:#111,stroke-width:1px;
+  class UNLOCKED unlocked
+  class SHARED shared
+  class RESERVED,PENDING,EXCLUSIVE exclusive
 ```
 
 ### WAL write / checkpoint (Mode 2, single-process exclusive)
 
 ```mermaid
 sequenceDiagram
-  participant App
-  participant SQLite as SQLite (wasm)
-  participant VFS as Deno-FS VFS
-  participant WAL as -wal file
-  participant DB as main db file
+  box rgb(168,177,255) app + SQLite engine
+    participant App
+    participant SQLite as SQLite (wasm)
+  end
+  box rgb(112,255,175) our VFS
+    participant VFS as Deno-FS VFS
+  end
+  box rgb(255,212,121) files (granted paths)
+    participant WAL as -wal file
+    participant DB as main db file
+  end
 
   Note over SQLite: PRAGMA locking_mode=EXCLUSIVE *before* journal_mode=WAL<br/>→ wal-index in heap, NO -shm, xShm* never called
   App->>SQLite: COMMIT
