@@ -11,10 +11,10 @@
   },
   "fmt": {
     "lineWidth": 100,
-    "exclude": [".claude/", ".project/"]
+    "exclude": [".claude/", ".project/", "src/wasm/sqlite3.mjs", "src/wasm/index.d.mts"]
   },
   "lint": {
-    "exclude": [".claude/", ".project/"],
+    "exclude": [".claude/", ".project/", "src/wasm/sqlite3.mjs", "src/wasm/index.d.mts"],
     "rules": {
       "tags": ["recommended", "jsr"],
       "include": [
