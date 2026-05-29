@@ -432,4 +432,4 @@ shipped).
 
 ## License
 
-**TBD** — MIT or Apache-2.0, not yet decided.
+[MIT](./LICENSE) © 2026 ul0gic. Do whatever you want with it.
