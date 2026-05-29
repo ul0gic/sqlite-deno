@@ -1,5 +1,5 @@
 {
-  "name": "@scope/sqlite",
+  "name": "@ul0gic/sqlite-deno",
   "version": "0.0.0",
   "license": "MIT",
   "exports": "./src/mod.ts",
