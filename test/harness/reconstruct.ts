@@ -1,5 +1,5 @@
 import type { FileImage, Op } from "./oplog.ts";
-import { SECTOR_SIZE, touchedSectors } from "./oplog.ts";
+import { dirOf, SECTOR_SIZE, touchedSectors } from "./oplog.ts";
 import type { Rng } from "./rng.ts";
 
 export const RECONSTRUCTIONS = [
@@ -22,6 +22,8 @@ interface FileState {
   zombieSize: number;
   wasDeleted: boolean;
   dirtySectors: Set<number>;
+  createDurable: boolean;
+  deleteDurable: boolean;
 }
 
 const blank = (): FileState => ({
@@ -35,6 +37,8 @@ const blank = (): FileState => ({
   zombieSize: 0,
   wasDeleted: false,
   dirtySectors: new Set(),
+  createDurable: false,
+  deleteDurable: false,
 });
 
 const ensure = (states: Map<string, FileState>, file: string): FileState => {
@@ -53,15 +57,37 @@ const grow = (buf: Uint8Array, size: number, needed: number): Uint8Array => {
   return next;
 };
 
+/**
+ * A `dir-sync` makes the *current* set of dentries in that directory durable —
+ * POSIX `fsync` on the directory fd. For every file in the dir: if it currently
+ * exists, its create-dentry is now durable (no longer droppable); if it was
+ * deleted, its unlink-dentry is now durable (the zombie can no longer be
+ * resurrected). Dentry changes after this point stay droppable until the next
+ * dir-sync — faithful to DEC-007 §4 (a dentry change is durable only when an
+ * explicit directory sync has covered it).
+ */
+const applyDirSync = (states: Map<string, FileState>, dir: string): void => {
+  for (const [file, s] of states) {
+    if (dirOf(file) !== dir) continue;
+    if (s.liveExists) s.createDurable = true;
+    if (s.wasDeleted) s.deleteDurable = true;
+  }
+};
+
 const applyOps = (ops: readonly Op[], k: number): Map<string, FileState> => {
   const states = new Map<string, FileState>();
   for (let i = 0; i < k && i < ops.length; i++) {
     const op = ops[i];
     if (op === undefined) continue;
+    if (op.kind === "dir-sync") {
+      if (op.real) applyDirSync(states, op.dir);
+      continue;
+    }
     const s = ensure(states, op.file);
     if (op.kind === "open-create") {
       s.liveExists = true;
       s.wasDeleted = false;
+      s.deleteDurable = false;
     } else if (op.kind === "write") {
       s.live = grow(s.live, s.liveSize, op.offset + op.bytes.length);
       s.live.set(op.bytes, op.offset);
@@ -79,6 +105,7 @@ const applyOps = (ops: readonly Op[], k: number): Map<string, FileState> => {
       }
       s.liveExists = false;
       s.syncedExists = false;
+      s.createDurable = false;
       s.live = new Uint8Array(0);
       s.liveSize = 0;
       s.synced = new Uint8Array(0);
@@ -145,14 +172,14 @@ const resolveFile = (
   dentryDurable: boolean,
 ): FileImage | null => {
   if (s.liveExists) {
-    if (s.syncedExists || dentryDurable) {
+    if (s.syncedExists || s.createDurable || dentryDurable) {
       return { bytes: reconstructBytes(s, variant, rng), exists: true };
     }
     return dentryDropped(variant, rng)
       ? null
       : { bytes: reconstructBytes(s, variant, rng), exists: true };
   }
-  if (!dentryDurable && s.wasDeleted && dentryDropped(variant, rng)) {
+  if (!dentryDurable && !s.deleteDurable && s.wasDeleted && dentryDropped(variant, rng)) {
     return { bytes: s.zombie.slice(0, s.zombieSize), exists: true };
   }
   return null;

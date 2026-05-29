@@ -3,16 +3,19 @@ import type { CStrPtr, FilePtr, OutPtr } from "../../src/wasm/ptr.ts";
 import type { IoMethods, VfsMethods } from "../../src/vfs/types.ts";
 import { asIoMethodsArg, asVfsMethodsArg } from "../../src/vfs/types.ts";
 import type { Op } from "./oplog.ts";
-import { SECTOR_SIZE } from "./oplog.ts";
+import { dirOf, SECTOR_SIZE } from "./oplog.ts";
 
 const INITIAL_CAPACITY = 4096;
 const MAX_PATHNAME = 1024;
+
+const isJournal = (name: string): boolean => name.endsWith("-journal");
 
 interface CrashFile {
   data: Uint8Array;
   size: number;
   readonly deleteOnClose: boolean;
   readonly name: string;
+  dirSynced: boolean;
 }
 
 export interface CrashRecorder {
@@ -24,6 +27,15 @@ export interface CrashRecorder {
 interface CrashVfsConfig {
   readonly vfsName: string;
   readonly realSync: boolean;
+  /**
+   * When true, model `os_unix.c`'s directory fsyncs: a `dir-sync` op is emitted
+   * (a) right after the `-journal`'s first `xSync` (the create-dentry dir-sync,
+   * `UNIXFILE_DIRSYNC` riding on the first journal sync — os_unix.c `unixSync`),
+   * and (b) right after `xDelete` of the `-journal` when `syncDir & 1` (the
+   * commit-point dir-sync — os_unix.c `unixDelete`). This is the VFS-level fix
+   * for BUG-001 expressed in pure Deno via `Deno.openSync(dir).syncSync()`.
+   */
+  readonly dirSync?: boolean;
 }
 
 const growTo = (file: CrashFile, needed: number): void => {
@@ -46,7 +58,7 @@ const growTo = (file: CrashFile, needed: number): void => {
  */
 export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRecorder => {
   const { capi, wasm, struct } = sqlite3;
-  const { vfsName, realSync } = cfg;
+  const { vfsName, realSync, dirSync = false } = cfg;
 
   const files = new Map<string, CrashFile>();
   const open = new Map<FilePtr, CrashFile>();
@@ -139,6 +151,10 @@ export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRec
         const f = open.get(asFile(pFile));
         if (!f) return capi.SQLITE_IOERR_FSYNC;
         ops.push({ kind: "sync", file: f.name, real: realSync });
+        if (dirSync && isJournal(f.name) && !f.dirSynced) {
+          f.dirSynced = true;
+          ops.push({ kind: "dir-sync", dir: dirOf(f.name), real: realSync });
+        }
         return capi.SQLITE_OK;
       } catch {
         return capi.SQLITE_IOERR_FSYNC;
@@ -206,6 +222,7 @@ export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRec
             size: 0,
             deleteOnClose: (flags & capi.SQLITE_OPEN_DELETEONCLOSE) !== 0,
             name,
+            dirSynced: false,
           };
           files.set(name, f);
           ops.push({ kind: "open-create", file: name });
@@ -220,12 +237,15 @@ export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRec
         return capi.SQLITE_CANTOPEN;
       }
     },
-    xDelete: (_pVfs: number, zName: number, _syncDir: number): number => {
+    xDelete: (_pVfs: number, zName: number, syncDir: number): number => {
       try {
         const name = nameOf(zName);
         if (name !== null) {
           files.delete(name);
           ops.push({ kind: "delete", file: name });
+          if (dirSync && (syncDir & 1) !== 0) {
+            ops.push({ kind: "dir-sync", dir: dirOf(name), real: realSync });
+          }
         }
         return capi.SQLITE_OK;
       } catch {

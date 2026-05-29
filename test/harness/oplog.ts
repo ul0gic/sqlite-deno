@@ -10,7 +10,13 @@ export type Op =
   }
   | { readonly kind: "truncate"; readonly file: string; readonly size: number }
   | { readonly kind: "sync"; readonly file: string; readonly real: boolean }
-  | { readonly kind: "delete"; readonly file: string };
+  | { readonly kind: "delete"; readonly file: string }
+  | { readonly kind: "dir-sync"; readonly dir: string; readonly real: boolean };
+
+export const dirOf = (file: string): string => {
+  const slash = file.lastIndexOf("/");
+  return slash <= 0 ? "/" : file.slice(0, slash);
+};
 
 export interface FileImage {
   readonly bytes: Uint8Array;
@@ -23,7 +29,8 @@ export interface OpLog {
 }
 
 export const isMutatingOp = (op: Op): boolean =>
-  op.kind === "write" || op.kind === "truncate" || op.kind === "sync" || op.kind === "delete";
+  op.kind === "write" || op.kind === "truncate" || op.kind === "sync" ||
+  op.kind === "delete" || op.kind === "dir-sync";
 
 export const sectorOf = (offset: number): number => Math.floor(offset / SECTOR_SIZE);
 
