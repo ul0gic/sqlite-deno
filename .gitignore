@@ -1,0 +1,21 @@
+# Local tooling & planning — kept out of version control by project preference
+.claude/
+.project/
+
+# Deno
+cov_profile/
+*.lcov
+
+# Test artifacts (databases live in temp dirs; this catches strays at the root)
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Node baggage must never appear in a true-Deno package
+node_modules/
+package.json
+package-lock.json
