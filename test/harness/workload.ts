@@ -13,10 +13,14 @@ export interface RecordedWorkload {
   readonly dbName: string;
 }
 
+export const JOURNAL_MODES = ["DELETE", "PERSIST", "TRUNCATE"] as const;
+export type JournalMode = (typeof JOURNAL_MODES)[number];
+
 export interface WorkloadSpec {
   readonly txns: number;
   readonly rowsPerTxn: number;
   readonly dbName: string;
+  readonly journalMode?: JournalMode;
 }
 
 export const runWorkload = (
@@ -28,7 +32,7 @@ export const runWorkload = (
   const commits: Commit[] = [];
   const db = new sqlite3.oo1.DB(spec.dbName, "c", recorder.name);
   try {
-    db.exec("PRAGMA journal_mode=DELETE");
+    db.exec(`PRAGMA journal_mode=${spec.journalMode ?? "DELETE"}`);
     db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
     let value = 1;
     for (let t = 0; t < spec.txns; t++) {
