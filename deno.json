@@ -6,6 +6,7 @@
     "check": "deno fmt --check && deno lint && deno check src/mod.ts && deno task lint:biome && deno test -A",
     "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint --error-on-warnings .",
     "test": "deno test -A",
+    "test:soak": "SQLITE_DENO_SOAK=1 deno test -A test/harness/concurrency_test.ts --filter SOAK",
     "bench": "deno bench -A",
     "build": "deno run -A build/build.ts"
   },
