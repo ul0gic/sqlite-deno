@@ -6,24 +6,24 @@
 
 This is a **build-in-public** repository. The engine — a pure-TypeScript Deno-filesystem VFS over
 the SQLite team's official WebAssembly build, with two concurrency modes and crash recovery — is
-built and **proven**. The public API is **not built yet**. Read the status section before you read
-anything else.
+built and tested against a deterministic crash/concurrency harness. The public API is **not built
+yet**. Please read the status section before anything else, so you know exactly what works today.
 
 ---
 
-## ⚠️ Status: engine proven, library not yet usable
+## ⚠️ Status: engine working and tested, library not yet usable
 
 **Phase 6 of 10 complete.** You **cannot** `import` and open a database from this package today —
 there is no `openDatabase`, no `Database`, no `Statement`. That is Phase 7.
 
-What _is_ done is the hard part — the part everyone said couldn't be done under Deno's permission
-model:
+Here is what is built so far. The foundation — the VFS, the locking, and the crash-recovery behavior
+— comes first, because everything above it depends on getting these right:
 
-|                                  |                                                                                                                                                                                                                       |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Proven**                       | The Deno-filesystem VFS (pure TypeScript, over `Deno.*Sync`). Both concurrency modes. Crash / power-loss recovery, on Linux.                                                                                          |
-| **Not built**                    | The public API (`openDatabase`, `Database`, `Statement`, transactions). The reproducible byte-identical wasm build. The JSR release.                                                                                  |
-| **Vendored, not yet self-built** | The wasm is the official `@sqlite.org/sqlite-wasm` `3.53.0-build1`, committed in-package (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). Building our own byte-for-byte from pinned source is Phase 9 and is **0% done**. |
+|                                  |                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Working and tested**           | The Deno-filesystem VFS (pure TypeScript, over `Deno.*Sync`). Both concurrency modes. Crash / power-loss recovery, on Linux (model-bounded — see [the caveats](#the-honest-capability-envelope-the-asterisks-each-with-the-why)). |
+| **Not built**                    | The public API (`openDatabase`, `Database`, `Statement`, transactions). The reproducible byte-identical wasm build. The JSR release.                                                                                              |
+| **Vendored, not yet self-built** | The wasm is the official `@sqlite.org/sqlite-wasm` `3.53.0-build1`, committed in-package (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). Building our own byte-for-byte from pinned source is Phase 9 and is **0% done**.             |
 
 ```
 v0 — prove the path
@@ -60,35 +60,38 @@ deno task check     # fmt, lint, type-check, and the full proof suite (69 tests)
 
 ## What it is, and why it exists
 
-Every SQLite option for Deno today forces a compromise:
+There are several good SQLite options for Deno already, and each is a sensible choice for a
+different problem. The combination none of them offers in one package is **permission-respecting,
+WAL-capable, and able to run everywhere Deno runs** — and that is the niche this project aims to
+fill. Each existing option makes a different, reasonable trade-off:
 
-- **FFI options** (`@db/sqlite`) are fast and full-featured but require `--allow-ffi` — which
-  collapses Deno's permission model back to Node-equivalent — download a prebuilt `.so` at first
-  run, and **cannot run on Deno Deploy or the edge** (no FFI there).
-- **The existing WASM lineage** (`dyedgreen/deno-sqlite`) respects the permission model but has no
-  WAL, no file locking, and no shared memory, and is dormant.
-- **`node:sqlite`**, built into Deno, works, but it is the Node-shaped API and a native engine — not
-  the Deno permission-model story, and not the edge story.
+- **FFI options** (`@db/sqlite`) are fast and full-featured. The trade-off is that they require
+  `--allow-ffi` (which widens Deno's permission model back toward the Node default), download a
+  prebuilt `.so` at first run, and cannot run on Deno Deploy or the edge, because there is no FFI
+  there.
+- **The existing WASM lineage** (`dyedgreen/deno-sqlite`) respects the permission model and has
+  served a lot of projects well. It predates SQLite's official wasm build and does not have WAL,
+  file locking, or shared memory.
+- **`node:sqlite`**, built into Deno, is a great fit if you want a batteries-included native engine
+  with the Node-shaped API. It is a native engine rather than a permission-model-first or edge
+  story.
 
-You cannot today get **permission-respecting + WAL + runs-everywhere** in one package. That is the
-gap this exists to close.
+The bet behind this project is a smaller, more specific one: Deno's permission model is most useful
+when infrastructure-grade packages can honor it without an escape hatch, and a SQLite that stays
+inside the permission model is a worthwhile thing to have for the cases where that matters. That is
+the goal — to cover that specific gap well, not to replace anything that already works.
 
-The bet behind it: Deno's permission model only pays off if the _infrastructure-grade_ packages
-honor it. A SQLite that is true-Deno with no escape hatches proves the uncompromised path is real —
-and becomes the answer to "but Deno can't do real database work." That is the contribution: not
-another package, but proof the pattern works for the hard cases.
-
-**The permission model is the product.** Everything else is in service of it.
+**The permission model is the design constraint everything else serves.**
 
 ---
 
-## The permission story (the differentiator)
+## The permission story
 
-The wasm has **no ambient authority**. All of SQLite's I/O flows back out through our VFS callbacks,
-and those reach the filesystem only through path-scoped `Deno.*Sync` calls. The module cannot open a
-file the host did not hand it. If this package were supply-chain-compromised tomorrow, its blast
-radius would still be **exactly** the paths you granted — no FFI to abuse, no network to phone home,
-no ambient filesystem.
+This is the part the project cares most about getting right. The wasm has **no ambient authority**.
+All of SQLite's I/O flows back out through our VFS callbacks, and those reach the filesystem only
+through path-scoped `Deno.*Sync` calls. The module cannot open a file the host did not hand it. If
+this package were supply-chain-compromised tomorrow, its blast radius would still be **exactly** the
+paths you granted — no FFI to abuse, no network to phone home, no ambient filesystem.
 
 What the package needs, and nothing more:
 
@@ -151,16 +154,38 @@ The key facts:
 
 ```mermaid
 flowchart TD
-  C["SQLite C engine (wasm)"] -->|xOpen xRead xWrite xSync xClose| IO["src/vfs/io.ts"]
-  C -->|xAccess xFullPathname xDelete| NS["src/vfs/namespace.ts"]
-  C -->|xLock xUnlock xCheckReservedLock| LK["src/vfs/lock.ts (Mode 1)"]
-  IO --> DENO["Deno.*Sync (read/write/sync/truncate)"]
+  C["SQLite C engine (wasm)"]
+  IO["src/vfs/io.ts"]
+  NS["src/vfs/namespace.ts"]
+  LK["src/vfs/lock.ts (Mode 1)"]
+  DENO["Deno.*Sync<br/>(read / write / sync / truncate)"]
+  FLOCK["Deno FsFile.tryLockSync / unlockSync<br/>(whole-file flock)"]
+  FS[("granted paths only")]
+
+  C -->|xOpen xRead xWrite xSync xClose| IO
+  C -->|xAccess xFullPathname xDelete| NS
+  C -->|xLock xUnlock xCheckReservedLock| LK
+  IO --> DENO
   NS --> DENO
-  LK --> FLOCK["Deno FsFile.tryLockSync / unlockSync (whole-file flock)"]
-  DENO --> FS[("granted paths only")]
+  LK --> FLOCK
+  DENO --> FS
   FLOCK --> FS
-  note["Every callback catches all errors and returns a SQLite result code.<br/>A throw across into C is a bug — never an error path."]
+
+  classDef engine fill:#a8b1ff,stroke:#111,color:#111,stroke-width:1px;
+  classDef vfs fill:#70ffaf,stroke:#111,color:#111,stroke-width:1px;
+  classDef host fill:#bff7d4,stroke:#111,color:#111,stroke-width:1px;
+  classDef disk fill:#ffd479,stroke:#111,color:#111,stroke-width:1px;
+
+  class C engine;
+  class IO,NS,LK vfs;
+  class DENO,FLOCK host;
+  class FS disk;
 ```
+
+Every VFS callback catches all errors and returns a SQLite result code; a throw across into C is a
+bug, never an error path. Colors only group the layers: blue is the SQLite engine, green is our
+pure-TypeScript VFS, light green is the Deno host API it calls, and amber is the filesystem boundary
+that stays inside the granted paths.
 
 ### The lock ladder (Mode 1, as shipped)
 
@@ -185,6 +210,9 @@ stateDiagram-v2
     No upgrade path exists, so the flock-upgrade hazard cannot occur.
     Consequence: multi-process SERIALIZED — one accessor at a time.
   end note
+
+  classDef locked fill:#70ffaf,stroke:#111,color:#111,stroke-width:1px;
+  class SHARED,RESERVED,PENDING,EXCLUSIVE locked
 ```
 
 ### WAL write / checkpoint (Mode 2, single-process exclusive)
@@ -211,10 +239,10 @@ sequenceDiagram
 
 ---
 
-## What's proven, and how to verify it yourself
+## What's tested, and how to verify it yourself
 
-The correctness claims here are **executable**, not asserted. The whole suite runs from a clean
-checkout:
+The correctness claims here are meant to be **executable rather than taken on faith** — please run
+them and check. The whole suite runs from a clean checkout:
 
 ```bash
 deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite — 69 tests
@@ -247,7 +275,8 @@ These run on the **vendored** wasm and the **real** Deno-FS VFS — never a stub
 
 ## The honest capability envelope (the asterisks, each with the why)
 
-This is where most projects bury the limitations. We lead with them.
+These are the limitations, up front, each with the reason behind it. If any of these rule the
+package out for your use case, that is genuinely useful to know before you invest time in it.
 
 ### Mode 1 — rollback journal, multi-process: **serialized**
 
@@ -301,33 +330,38 @@ long-running server process owning its database. Multi-process WAL is **v2**.
 
 ## What we ran into and decided (the engineering story)
 
-The decisions below are the durable record of _why_ the thing is built the way it is. The short
-version: **no mode ships unproven — "mostly works" is data corruption with extra steps.** Twice this
-discipline caught a corruption hole that would otherwise have shipped.
+The decisions below are the durable record of _why_ the thing is built the way it is, including the
+times the first attempt was wrong. The guiding rule: **no concurrency or durability mode ships until
+its harness proves it — for a database, "mostly works" is silent corruption waiting to happen.**
+Twice this discipline caught a corruption hole that would otherwise have shipped, and both are
+written up below, mistakes included.
 
-### WASM, not FFI — because the permission model _is_ the product
+### WASM, not FFI — to keep the permission model intact
 
-FFI would be faster and easier. It would also require `--allow-ffi` (which collapses Deno's
-permission model), download a native binary at first run, and break on Deno Deploy. We chose WASM
-with a VFS so the engine has **no ambient authority** and the blast radius is exactly the granted
-paths. This is the central trade: we give up some write throughput and win the permission model, the
-edge, and a verifiable supply chain. We say so plainly in the matrix below.
+FFI would be faster and simpler to build. The trade-off is that it requires `--allow-ffi` (which
+widens Deno's permission model), downloads a native binary at first run, and does not run on Deno
+Deploy. This project takes the other side of that trade: WASM with a VFS, so the engine has **no
+ambient authority** and the blast radius is exactly the granted paths. The cost is some write
+throughput; the gain is the permission model, the edge, and a verifiable supply chain. That trade is
+laid out plainly in the matrix below — including where it loses.
 
 ### A pure-TypeScript VFS — no recompile, edge-compatible
 
-Rather than fork a lineage or compile our own wasm, we consume the official
-`@sqlite.org/sqlite-wasm` and register a VFS against it in pure TypeScript via `installVfs`. v1
-carries **no C toolchain** — the package is auditable TypeScript over a pinned wasm blob. (We did
-_not_ fork `@db/sqlite`, whose entire architecture is FFI-first, nor the `dyedgreen` lineage, which
-predates the official wasm and was built when WAL was deemed impossible.)
+Rather than fork an existing lineage or compile our own wasm, the project consumes the official
+`@sqlite.org/sqlite-wasm` and registers a VFS against it in pure TypeScript via `installVfs`. v1
+carries **no C toolchain** — the package is auditable TypeScript over a pinned wasm blob. We did not
+fork `@db/sqlite` (its architecture is FFI-first, a different and valid design) nor the `dyedgreen`
+lineage (it predates the official wasm build that makes this VFS approach practical); building fresh
+on the official wasm was the cleanest fit for the permission-first goal here.
 
 ### The crash harness as a gate — built _before_ locking and WAL
 
-The highest-leverage code in the project is a deterministic crash-simulation VFS, built _before_ any
-locking or WAL so every later mode is provable. A locking or WAL mode is exposed only after its
-crash + concurrency harness is green, with a mandatory **negative control** proving the harness has
-teeth. This is non-negotiable: a red harness means the mode is single-process-only or unshipped —
-never "ship it and watch."
+The most load-bearing code in the project is a deterministic crash-simulation VFS, built _before_
+any locking or WAL so every later mode can be checked against it. A locking or WAL mode is exposed
+only after its crash + concurrency harness is green, including a **negative control** that proves
+the harness can actually fail (a harness that stays green with durability disabled would prove
+nothing). This is the one rule we hold firmly: a red harness means the mode stays
+single-process-only or unshipped, rather than "ship it and watch."
 
 ### BUG-001 — the crash harness found _silent_ committed-data loss, and the first fix was wrong
 
@@ -354,8 +388,9 @@ unproven.
 
 ## Honest comparison matrix
 
-A fair read of where this sits. We lose on raw write throughput; we win or draw elsewhere. We do not
-strawman the alternatives — each is a reasonable choice for a different problem.
+A fair read of where this sits among good alternatives. It is slower on raw write throughput, and
+trades that for the permission model and edge support. None of the alternatives are strawmen — each
+is a reasonable choice, and for many projects the right one.
 
 |                                 | **sqlite-deno** (this)                          | `@db/sqlite` (FFI)                 | `node:sqlite` (built-in)                        | `dyedgreen/deno-sqlite` (WASM)     | `@sqlite.org/sqlite-wasm` (official)  |
 | ------------------------------- | ----------------------------------------------- | ---------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------------------------------- |
@@ -370,9 +405,9 @@ strawman the alternatives — each is a reasonable choice for a different proble
 | Deno-filesystem VFS             | **yes** (pure TS)                               | n/a (native)                       | n/a (native)                                    | yes                                | no (OPFS-oriented)                    |
 | **Usable as a library today**   | **NO — engine only, API is Phase 7**            | yes                                | yes                                             | yes                                | yes (browser)                         |
 
-Take-away: if you need maximum bulk-write speed and `--allow-ffi` is acceptable, use `@db/sqlite`.
-If you need an embedded SQLite that **keeps Deno's permission model intact and runs on the edge**,
-that is the gap this fills — once Phase 7 lands.
+Take-away: if you need maximum bulk-write speed and `--allow-ffi` is acceptable, `@db/sqlite` is an
+excellent choice. If what you need is an embedded SQLite that **keeps Deno's permission model intact
+and runs on the edge**, that is the gap this project is aiming at — once Phase 7 lands.
 
 ---
 
@@ -383,9 +418,9 @@ that is the gap this fills — once Phase 7 lands.
 - **Phase 7 — Public API.** `openDatabase`, `Database`, typed `Statement<Row>`, transactions,
   `using`/`Symbol.dispose` lifetimes, Web-Streams result streaming. Mode selection is explicit and
   constrained at open (illegal combos unrepresentable), so a caller cannot accidentally leave the
-  proven engine envelope. No user-defined SQL functions in v1 (that JS-callback-reentrancy surface
-  is exactly where native engines have hit use-after-free; it waits until the reentrancy model is
-  proven).
+  tested engine envelope. No user-defined SQL functions in v1 (that JS-callback-reentrancy surface
+  is one place native engines have historically hit use-after-free; it waits until the reentrancy
+  model is tested).
 - **Phase 8 — Full L1–L6 test suite** (functional, permission, crash/durability, concurrency,
   borrowed SQLite/fuzz corpora, build).
 - **Phase 9 — Reproducible byte-identical wasm build.** Today the wasm is the **vendored** official
@@ -395,32 +430,46 @@ that is the gap this fills — once Phase 7 lands.
 
 **v2 — multi-process WAL.** Gated on contributing byte-range `fcntl(F_OFD_SETLK)` locking to Deno
 core (`ext/io/fs.rs`) and exposing mmap for a real `-shm`. With those, Mode 1 gets the faithful
-three-byte-range ladder (true concurrent readers) and WAL goes multi-process. This is a
-self-contained, on-mission Deno-core contribution — and a forcing function on the runtime.
+three-byte-range ladder (true concurrent readers) and WAL goes multi-process. The hope is that this
+turns into a focused, useful contribution upstream to Deno itself — help on that front is very
+welcome.
 
 ---
 
-## Running the gate / contributing
+## Contributing
+
+Contributions, issues, questions, and code review are all genuinely welcome — this is built in
+public partly so others can poke at it. Whether you want to fix a bug, add a proof to the harness,
+improve the docs, or just ask how something works, please jump in. **See
+[CONTRIBUTING.md](./CONTRIBUTING.md) for a full guide** to getting oriented, running the suite, and
+what a good PR looks like.
+
+The quick version — the gate every change keeps green:
 
 ```bash
-deno task check        # the gate: fmt --check, lint, type-check, type-aware lint, test
-deno task test         # full suite
-deno task test:soak    # Mode 1 multi-process soak (SQLITE_DENO_SOAK=1, CPU-oversubscribed)
+deno task check         # fmt --check, lint, type-check, type-aware lint, test
+deno task test          # full suite
+deno task test:soak     # Mode 1 multi-process soak (SQLITE_DENO_SOAK=1, CPU-oversubscribed)
 deno task test:soak:wal # Mode 2 WAL crash-sweep soak
-deno task bench        # hot-path measurement
+deno task bench         # hot-path measurement
 ```
 
-Every change must keep the gate green — zero failures, zero lint warnings, zero suppressions. The
-non-negotiable rule: **no concurrency or durability mode is exposed until its crash/concurrency
-harness is green, including its negative control.** The permission model is the product; no change
-may require a grant beyond `--allow-read`/`--allow-write` on the target database, and no code path
-may acquire a permission the caller did not pass in.
+Two principles guide the project, and they exist to keep it trustworthy rather than to gatekeep:
+
+- **A database must not lose your data.** So no concurrency or durability mode is exposed until its
+  crash/concurrency harness is green — including a negative control that proves the harness can
+  actually catch corruption. Adding new proofs here is one of the most valuable things you can
+  contribute.
+- **The permission model stays intact.** No change may require a grant beyond
+  `--allow-read`/`--allow-write` on the target database, and no code path acquires a permission the
+  caller did not pass in. No FFI, no network, no ambient filesystem.
 
 The toolchain is entirely Deno's built-ins (`deno check` / `lint` / `fmt` / `test` / `bench`) plus a
-pinned, checksum-verified Biome for type-aware lint (dev/CI only — never shipped).
+pinned, checksum-verified Biome for type-aware lint (dev/CI only — never shipped). The
+[roadmap](#roadmap) and the issue tracker are the best places to find where help is wanted.
 
 ---
 
 ## License
 
-[MIT](./LICENSE) © 2026 ul0gic. Do whatever you want with it.
+[MIT](./LICENSE) © 2026 ul0gic
