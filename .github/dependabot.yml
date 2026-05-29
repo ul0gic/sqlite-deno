@@ -1,0 +1,22 @@
+version: 2
+
+# Dependabot only covers the one ecosystem that genuinely applies here: the
+# SHA-pinned GitHub Actions in .github/workflows. It has no clean support for
+# deno.json / JSR imports, so no npm or other ecosystem is configured (adding
+# one would imply a dependency surface this package does not have). Deno-side
+# supply-chain integrity is enforced elsewhere: the committed, --frozen-verified
+# deno.lock and the pinned, checksum-verified Biome binary (DEC-005).
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # Keep the SHA pins; Dependabot rewrites both the SHA and the trailing
+    # version comment in lockstep so the pin-by-SHA invariant is preserved.
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions

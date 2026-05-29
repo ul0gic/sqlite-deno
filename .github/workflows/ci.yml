@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the gate only reads the repository. No write scope anywhere.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref; a newer push/PR update supersedes the old gate.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (fmt, lint, check, biome, test)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
+        with:
+          deno-version: "2.8.1"
+
+      # Pre-fetch and verify the committed lockfile so a tampered or drifted
+      # dependency fails here, before any code runs (--frozen rejects lock drift).
+      - name: Cache and verify dependencies
+        run: deno install --frozen
+
+      # deno task check = fmt --check && lint && check && lint:biome && test -A.
+      # lint:biome fetches the pinned, checksum-verified Biome binary (DEC-005);
+      # the download is the only network access the gate performs and is sandboxed
+      # to a GitHub release asset whose sha256 is recorded in tools/biome.sha256.
+      - name: Gate
+        run: deno task check

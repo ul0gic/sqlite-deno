@@ -1,0 +1,55 @@
+name: scorecard
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly posture re-score; Scorecard checks (Branch-Protection, Token-Permissions,
+    # Pinned-Dependencies, etc.) shift as the repo and its actions evolve.
+    - cron: "41 5 * * 1"
+
+# Least privilege at the top level; the analysis job escalates only what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: scorecard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Upload the SARIF result to the code-scanning dashboard.
+      security-events: write
+      # OIDC token lets Scorecard publish a signed, verifiable result to the public
+      # API behind the scorecard.dev badge — no secret required for a public repo.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishes the score to the public OpenSSF API for the scorecard.dev badge.
+          # Safe for a public repo and needs no token; uses the OIDC id-token above.
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: results.sarif
