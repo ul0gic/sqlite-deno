@@ -14,9 +14,10 @@ const MAX_PATHNAME = 1024;
  * no ambient authority, so the blast radius is exactly the paths the caller
  * granted (see `.claude/rules/security.md`).
  *
- * Single-process scope (DEC-006): locking is a no-op, so the database must be
- * opened by at most one connection in one process. Concurrent access is
- * undefined behavior until Phase 5 adds real locking.
+ * Mode 1 locking is the X-strict whole-file `flock` ladder (DEC-009): safe
+ * multi-process *serialized* access — one accessor at a time, no concurrent
+ * readers. A contending connection needs a `busy_timeout` to retry the
+ * `SQLITE_BUSY` rather than fail immediately.
  */
 export const installDenoVfs = (sqlite3: Sqlite3): string => {
   const { capi, wasm, struct } = sqlite3;

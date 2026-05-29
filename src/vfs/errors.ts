@@ -18,6 +18,10 @@ export interface ResultCodes {
   readonly ioErrClose: number;
   readonly ioErrDelete: number;
   readonly ioErrAccess: number;
+  readonly busy: number;
+  readonly ioErrLock: number;
+  readonly ioErrUnlock: number;
+  readonly ioErrCheckReservedLock: number;
 }
 
 export const resultCodes = ({ capi }: Sqlite3): ResultCodes => ({
@@ -33,6 +37,10 @@ export const resultCodes = ({ capi }: Sqlite3): ResultCodes => ({
   ioErrClose: capi.SQLITE_IOERR_CLOSE,
   ioErrDelete: capi.SQLITE_IOERR_DELETE,
   ioErrAccess: capi.SQLITE_IOERR_ACCESS,
+  busy: capi.SQLITE_BUSY,
+  ioErrLock: capi.SQLITE_IOERR_LOCK,
+  ioErrUnlock: capi.SQLITE_IOERR_UNLOCK,
+  ioErrCheckReservedLock: capi.SQLITE_IOERR_CHECKRESERVEDLOCK,
 });
 
 /** A target path that does not exist — distinguishes idempotent delete from a real I/O failure. */

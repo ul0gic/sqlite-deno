@@ -82,6 +82,7 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
           path,
           deleteOnClose: (flags & capi.SQLITE_OPEN_DELETEONCLOSE) !== 0,
           dirSyncPending: createsDentry,
+          lockLevel: capi.SQLITE_LOCK_NONE,
         });
         setPMethods(pFile, ioMethodsPtr);
         if (pOutFlags) wasm.poke32(asOut(pOutFlags), flags);

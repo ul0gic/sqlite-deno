@@ -3,6 +3,7 @@ import type { Sqlite3 } from "../glue.ts";
 import type { FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { IoMethods } from "./types.ts";
 import type { ResultCodes } from "./errors.ts";
+import { createLockMethods } from "./lock.ts";
 
 const SECTOR_SIZE = 4096;
 const SYNC_DATAONLY = 0x10;
@@ -16,12 +17,17 @@ const SYNC_DATAONLY = 0x10;
  * `dirSyncPending` is `os_unix.c`'s `UNIXFILE_DIRSYNC` latch: set in `xOpen`
  * when this open created the file's directory entry, consumed on the first
  * `xSync` to make that dentry durable (DEC-008).
+ *
+ * `lockLevel` is the SQLite lock state (`SQLITE_LOCK_NONE`…`_EXCLUSIVE`) this
+ * open believes it holds. The physical whole-file `LOCK_EX` is held iff
+ * `lockLevel >= SQLITE_LOCK_SHARED` — the X-strict ladder of DEC-009.
  */
 export interface OpenFile {
   readonly fd: Deno.FsFile;
   readonly path: string;
   readonly deleteOnClose: boolean;
   dirSyncPending: boolean;
+  lockLevel: number;
 }
 
 /**
@@ -75,8 +81,9 @@ const readUpTo = (fd: Deno.FsFile, buf: Uint8Array): number => {
  * Builds the `sqlite3_io_methods` callbacks over Deno's synchronous file API.
  * Every callback catches everything and returns a `SQLITE_*` code — a JS throw
  * crossing into SQLite's C is undefined behavior (see `.claude/rules/wasm.md`).
- * Locking is a no-op (single-process scope, DEC-006); `xDeviceCharacteristics`
- * returns 0 — claiming any IOCAP bit on an arbitrary filesystem corrupts.
+ * Locking is the X-strict whole-file `flock` ladder (`./lock.ts`, DEC-009);
+ * `xDeviceCharacteristics` returns 0 — claiming any IOCAP bit on an arbitrary
+ * filesystem corrupts.
  */
 export const createIoMethods = (
   sqlite3: Sqlite3,
@@ -86,6 +93,7 @@ export const createIoMethods = (
   const { wasm } = sqlite3;
   const asFile = (p: number): FilePtr => p as FilePtr;
   const asOut = (p: number): OutPtr => p as OutPtr;
+  const lock = createLockMethods(sqlite3, open, rc);
 
   return {
     xClose: (pFile: number): number => {
@@ -169,16 +177,9 @@ export const createIoMethods = (
         return rc.ioErrFstat;
       }
     },
-    xLock: (_pFile: number, _lockType: number): number => rc.ok,
-    xUnlock: (_pFile: number, _lockType: number): number => rc.ok,
-    xCheckReservedLock: (_pFile: number, pResOut: number): number => {
-      try {
-        wasm.poke32(asOut(pResOut), 0);
-        return rc.ok;
-      } catch {
-        return rc.ioErr;
-      }
-    },
+    xLock: lock.xLock,
+    xUnlock: lock.xUnlock,
+    xCheckReservedLock: lock.xCheckReservedLock,
     xFileControl: (_pFile: number, _op: number, _pArg: number): number =>
       sqlite3.capi.SQLITE_NOTFOUND,
     xSectorSize: (_pFile: number): number => SECTOR_SIZE,
