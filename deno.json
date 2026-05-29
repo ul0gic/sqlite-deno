@@ -4,7 +4,7 @@
   "exports": "./src/mod.ts",
   "tasks": {
     "check": "deno fmt --check && deno lint && deno check src/mod.ts && deno task lint:biome && deno test -A",
-    "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint .",
+    "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint --error-on-warnings .",
     "test": "deno test -A",
     "bench": "deno bench -A",
     "build": "deno run -A build/build.ts"
@@ -26,8 +26,15 @@
         "no-console",
         "no-eval",
         "no-external-import",
+        "no-implicit-declare-namespace-export",
+        "no-node-globals",
+        "no-non-null-asserted-optional-chain",
         "no-non-null-assertion",
+        "no-self-compare",
+        "no-sparse-arrays",
         "no-throw-literal",
+        "no-useless-rename",
+        "single-var-declarator",
         "verbatim-module-syntax"
       ]
     }

@@ -5,16 +5,65 @@
     "includes": ["src/**", "test/**"]
   },
   "formatter": { "enabled": false },
+  "assist": { "enabled": false },
   "linter": {
     "enabled": true,
     "domains": { "types": "recommended" },
     "rules": {
       "recommended": true,
+      "correctness": {
+        "noGlobalDirnameFilename": "error",
+        "noProcessGlobal": "error",
+        "useSingleJsDocAsterisk": "error"
+      },
+      "suspicious": {
+        "noConsole": "error",
+        "noConstEnum": "error",
+        "noEvolvingTypes": "error",
+        "noUnusedExpressions": "error",
+        "noVar": "error",
+        "useErrorMessage": "error",
+        "useGuardForIn": "error"
+      },
+      "style": {
+        "noEnum": "error",
+        "noParameterAssign": "error",
+        "useConsistentArrayType": {
+          "level": "error",
+          "options": { "syntax": "shorthand" }
+        },
+        "useForOf": "error",
+        "useThrowNewError": "error",
+        "useThrowOnlyError": "error"
+      },
+      "performance": {
+        "noDelete": "error",
+        "noReExportAll": "error"
+      },
       "nursery": {
         "noFloatingPromises": "error",
+        "noImpliedEval": "error",
         "noMisusedPromises": "error",
-        "useAwaitThenable": "error"
+        "noProto": "error",
+        "noReturnAssign": "error",
+        "noScriptUrl": "error",
+        "noUnnecessaryTemplateExpression": "error",
+        "noUselessReturn": "error",
+        "noUselessTypeConversion": "error",
+        "useAwaitThenable": "error",
+        "useNullishCoalescing": "error",
+        "useStringStartsEndsWith": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*_test.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    }
+  ]
 }
