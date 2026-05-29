@@ -7,6 +7,7 @@
     "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint --error-on-warnings .",
     "test": "deno test -A",
     "test:soak": "SQLITE_DENO_SOAK=1 deno test -A test/harness/concurrency_test.ts --filter SOAK",
+    "test:soak:wal": "SQLITE_DENO_SOAK=1 deno test -A test/harness/wal_crash_sweep_test.ts",
     "bench": "deno bench -A",
     "build": "deno run -A build/build.ts"
   },
