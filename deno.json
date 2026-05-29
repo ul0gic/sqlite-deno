@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "exports": "./src/mod.ts",
   "tasks": {
-    "check": "deno fmt --check && deno lint && deno check src/mod.ts && deno test -A",
+    "check": "deno fmt --check && deno lint && deno check src/mod.ts && deno task lint:biome && deno test -A",
+    "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint .",
     "test": "deno test -A",
     "bench": "deno bench -A",
     "build": "deno run -A build/build.ts"

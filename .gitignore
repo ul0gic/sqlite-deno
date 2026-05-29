@@ -2,6 +2,9 @@
 .claude/
 .project/
 
+# Vendored dev-tool binaries (pinned + checksummed; fetched by tools/install-biome.sh, never committed)
+tools/.bin/
+
 # Deno
 cov_profile/
 *.lcov
