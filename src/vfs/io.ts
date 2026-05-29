@@ -1,3 +1,4 @@
+import { dirname } from "@std/path";
 import type { Sqlite3 } from "../glue.ts";
 import type { FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { IoMethods } from "./types.ts";
@@ -11,12 +12,30 @@ const SYNC_DATAONLY = 0x10;
  * `sqlite3_file*`; it is never shared, because Deno has no positional
  * pread/pwrite and the VFS drives a shared seek offset — a second user of the
  * same handle would tear reads (see issue QA-001).
+ *
+ * `dirSyncPending` is `os_unix.c`'s `UNIXFILE_DIRSYNC` latch: set in `xOpen`
+ * when this open created the file's directory entry, consumed on the first
+ * `xSync` to make that dentry durable (DEC-008).
  */
 export interface OpenFile {
   readonly fd: Deno.FsFile;
   readonly path: string;
   readonly deleteOnClose: boolean;
+  dirSyncPending: boolean;
 }
+
+/**
+ * fsyncs the directory `dir` so a child's create/unlink dentry is durable —
+ * `Deno.openSync(dir, { read: true }).syncSync()` is a real directory fsync
+ * (strace-verified: `openat(O_RDONLY)` + `fsync`; DEC-008). Opening the parent
+ * dir needs a read grant on the dir itself — a file-only grant does NOT cover
+ * it (ENH-002); the denial fails closed as a result code and never widens the
+ * grant. The handle is closed on every path.
+ */
+export const syncDir = (dir: string): void => {
+  using dirFd = Deno.openSync(dir, { read: true });
+  dirFd.syncSync();
+};
 
 export type OpenRegistry = Map<FilePtr, OpenFile>;
 
@@ -131,6 +150,10 @@ export const createIoMethods = (
         if (!f) return rc.ioErrFsync;
         if ((flags & SYNC_DATAONLY) !== 0) f.fd.syncDataSync();
         else f.fd.syncSync();
+        if (f.dirSyncPending) {
+          f.dirSyncPending = false;
+          syncDir(dirname(f.path));
+        }
         return rc.ok;
       } catch {
         return rc.ioErrFsync;

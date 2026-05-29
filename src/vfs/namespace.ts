@@ -1,10 +1,24 @@
-import { resolve } from "@std/path";
+import { dirname, resolve } from "@std/path";
 import type { Sqlite3 } from "../glue.ts";
 import type { CStrPtr, FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { VfsMethods } from "./types.ts";
 import type { OpenRegistry } from "./io.ts";
+import { syncDir } from "./io.ts";
 import type { ResultCodes } from "./errors.ts";
 import { isNotFound } from "./errors.ts";
+
+const SQLITE_SYNC_DIR = 1;
+
+/** True when `path` has no directory entry — i.e. an open with CREATE would create one. */
+const isAbsent = (path: string): boolean => {
+  try {
+    Deno.statSync(path);
+    return false;
+  } catch (e) {
+    if (isNotFound(e)) return true;
+    throw e;
+  }
+};
 
 const encoder = new TextEncoder();
 
@@ -59,11 +73,15 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.cantOpen;
+        // os_unix.c sets UNIXFILE_DIRSYNC only when this open creates the dentry;
+        // pre-stat under a CREATE flag so the first xSync makes that dentry durable.
+        const createsDentry = (flags & capi.SQLITE_OPEN_CREATE) !== 0 && isAbsent(path);
         const fd = Deno.openSync(path, openOptions(capi, flags));
         open.set(asFile(pFile), {
           fd,
           path,
           deleteOnClose: (flags & capi.SQLITE_OPEN_DELETEONCLOSE) !== 0,
+          dirSyncPending: createsDentry,
         });
         setPMethods(pFile, ioMethodsPtr);
         if (pOutFlags) wasm.poke32(asOut(pOutFlags), flags);
@@ -72,7 +90,7 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
         return rc.cantOpen;
       }
     },
-    xDelete: (_pVfs: number, zName: number, _syncDir: number): number => {
+    xDelete: (_pVfs: number, zName: number, syncDirFlag: number): number => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.ok;
@@ -82,6 +100,9 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
           if (isNotFound(e)) return rc.ok;
           throw e;
         }
+        // os_unix.c fsyncs the parent dir after a commit-point unlink so the
+        // removed dentry is durable (the BUG-001 fix; DEC-008).
+        if ((syncDirFlag & SQLITE_SYNC_DIR) !== 0) syncDir(dirname(path));
         return rc.ok;
       } catch {
         return rc.ioErrDelete;
