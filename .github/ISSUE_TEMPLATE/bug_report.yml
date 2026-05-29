@@ -1,0 +1,44 @@
+name: Bug report
+description: Something behaves incorrectly — a crash, a wrong result, a durability/locking issue, or a result code you can't explain.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Heads-up: the engine is pre-API (there is no `openDatabase` yet — see the README status section). Reports against the VFS, the harnesses, or the engine driven via `installDenoVfs` are very welcome.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected
+      description: Include the exact error message or SQLite result code if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: The minimal snippet or commands that reproduce it. A failing test case is ideal.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: deno-version
+    attributes:
+      label: Deno version
+      description: Output of `deno --version`.
+    validations:
+      required: true
+  - type: input
+    id: os-fs
+    attributes:
+      label: OS and filesystem
+      description: e.g. Linux/ext4, macOS/APFS, NFS. The filesystem matters for durability and locking issues.
+    validations:
+      required: true
+  - type: input
+    id: perms
+    attributes:
+      label: Permission flags
+      description: The `--allow-*` flags you ran with, e.g. `--allow-read=./data --allow-write=./data`.
+    validations:
+      required: false

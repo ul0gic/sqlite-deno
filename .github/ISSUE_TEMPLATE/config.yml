@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas (Discussions)
+    url: https://github.com/ul0gic/sqlite-deno/discussions
+    about: For questions, design ideas, and general discussion. Issues are for bugs and concrete proposals.

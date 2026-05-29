@@ -1,0 +1,22 @@
+name: Feature request / idea
+description: Suggest a capability or a design direction.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describing the concrete problem you're trying to solve is more useful than a specific implementation. For open-ended or exploratory discussion, [Discussions](https://github.com/ul0gic/sqlite-deno/discussions) is often the better place to start.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you're trying to solve
+      description: What are you actually trying to do, and where does the current state get in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind (optional)
+      description: A sketch of the API or behavior, if you have one. Trade-offs and prior art are welcome.
+    validations:
+      required: false
