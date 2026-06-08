@@ -2,8 +2,9 @@ import type { Sqlite3 } from "./glue.ts";
 import type { DbPtr, StmtPtr } from "./wasm/ptr.ts";
 import { loadSqlite3 } from "./glue.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "./vfs/deno.ts";
-import { SqliteMisuseError, toSqliteError } from "./errors.ts";
+import { SqliteCantOpenError, SqliteMisuseError, toSqliteError } from "./errors.ts";
 import type { SqlValue } from "./marshal.ts";
+import { guardOpen } from "./vfs/guard.ts";
 import { createStatement, type Statement, type StatementRegistry } from "./statement.ts";
 import { createTransactionFactory, type Transaction } from "./transaction.ts";
 
@@ -14,6 +15,7 @@ const SQLITE_OPEN_EXRESCODE = 0x0200_0000;
 // `SQLITE_MISUSE`, inlined because the option guard rejects before the engine
 // loads, so `capi.SQLITE_MISUSE` is not yet reachable.
 const SQLITE_MISUSE = 21;
+const SQLITE_CANTOPEN = 14;
 
 /**
  * How the engine commits, in terms of the modes proven corruption-free by the
@@ -141,6 +143,32 @@ const configure = (raw: RawDb, opts: OpenOptions): void => {
   enterRollback(raw, opts.durability ?? "full");
 };
 
+const openFlags = (opts: OpenOptions): number =>
+  opts.readonly === true
+    ? SQLITE_OPEN_READONLY | SQLITE_OPEN_EXRESCODE
+    : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXRESCODE;
+
+/**
+ * Re-checks the db path against Deno's grant before the engine opens it, so a
+ * symlink-escape or a missing parent-directory read grant surfaces as a clear,
+ * `instanceof`-discriminable `SqliteCantOpenError` instead of an opaque downstream
+ * IOERR. The VFS enforces the same check on every file it opens (the journal and
+ * wal are opened lazily); this pre-flight only sharpens the message for the main
+ * db path, naming the parent-directory grant the canonicalization (and DEC-008's
+ * directory fsync) needs (SEC-001, ENH-002).
+ */
+const preflightGrant = (sqlite3: Sqlite3, path: string, opts: OpenOptions): void => {
+  const result = guardOpen(sqlite3, path, openFlags(opts));
+  if (result.kind === "granted") return;
+  const message = result.kind === "parent-unreadable"
+    ? "cannot open database: its parent directory is not in the read grant — " +
+      "grant --allow-read (and --allow-write for durable writes) on the parent " +
+      "directory, not the file alone"
+    : "cannot open database: the path resolves through a symlink to a target " +
+      "outside the granted directory; refusing to open outside the grant";
+  throw new SqliteCantOpenError(message, SQLITE_CANTOPEN, SQLITE_CANTOPEN);
+};
+
 const openHandle = (
   sqlite3: Sqlite3,
   path: string,
@@ -148,9 +176,7 @@ const openHandle = (
   opts: OpenOptions,
 ): DbPtr => {
   const { capi, wasm } = sqlite3;
-  const flags = opts.readonly === true
-    ? SQLITE_OPEN_READONLY | SQLITE_OPEN_EXRESCODE
-    : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXRESCODE;
+  const flags = openFlags(opts);
   const stack = wasm.pstack.pointer;
   try {
     const ppDb = wasm.pstack.alloc(4);
@@ -251,5 +277,6 @@ export const openDatabase = async (
   rejectReadonlyWal(opts);
   const sqlite3 = await loadSqlite3();
   installDenoVfs(sqlite3);
+  preflightGrant(sqlite3, path, opts);
   return openDatabaseWithVfs(sqlite3, path, DENO_VFS_NAME, opts);
 };

@@ -120,7 +120,7 @@ Deno.test("openDatabase through a parent-directory traversal out of the grant fa
   }
 });
 
-Deno.test("openDatabase through a symlink escaping the grant creates only an empty file outside, never a populated db (SEC-001)", async () => {
+Deno.test("openDatabase through a symlink escaping the grant is refused before any file is created (SEC-001)", async () => {
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-sym-in-" });
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-sym-out-" });
   try {
@@ -133,12 +133,51 @@ Deno.test("openDatabase through a symlink escaping the grant creates only an emp
       `${granted}/link/secret.db`,
     );
     assertEquals(code, 0);
-    assertEquals(out, "FAILED_CLOSED");
+    assertEquals(out, "DENIED_TYPED");
     assertEquals(out.includes("LEAK"), false);
+    assertEquals(existsSync(escapedReal), false);
     assertEquals(existsSync(`${escapedReal}-journal`), false);
-    if (existsSync(escapedReal)) assertEquals(Deno.statSync(escapedReal).size, 0);
   } finally {
     await Deno.remove(granted, { recursive: true });
     await Deno.remove(ungranted, { recursive: true });
+  }
+});
+
+Deno.test("openDatabase through a symlinked final component escaping the grant is refused with no leak (SEC-001)", async () => {
+  const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-symfin-in-" });
+  const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-symfin-out-" });
+  try {
+    await Deno.mkdir(`${ungranted}/real`);
+    const escapedReal = `${ungranted}/real/final.db`;
+    await Deno.symlink(escapedReal, `${granted}/finallink.db`);
+    const { code, out } = await runWorker(
+      [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
+      "symlink",
+      `${granted}/finallink.db`,
+    );
+    assertEquals(code, 0);
+    assertEquals(out, "DENIED_TYPED");
+    assertEquals(existsSync(escapedReal), false);
+  } finally {
+    await Deno.remove(granted, { recursive: true });
+    await Deno.remove(ungranted, { recursive: true });
+  }
+});
+
+Deno.test("openDatabase through an in-grant symlink whose target stays inside the grant still works (SEC-001 no over-refusal)", async () => {
+  const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-syminside-" });
+  try {
+    await Deno.mkdir(`${granted}/real`);
+    await Deno.symlink(`${granted}/real`, `${granted}/link`);
+    const { code, out } = await runWorker(
+      [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
+      "inside",
+      `${granted}/link/inside.db`,
+    );
+    assertEquals(code, 0);
+    assertStringIncludes(out, "ROUNDTRIP_OK");
+    assert(Deno.statSync(`${granted}/real/inside.db`).size > 0);
+  } finally {
+    await Deno.remove(granted, { recursive: true });
   }
 });

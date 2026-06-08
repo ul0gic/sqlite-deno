@@ -78,6 +78,28 @@ Deno.test("the db path fails closed with no filesystem grant for it", async () =
   }
 });
 
+Deno.test("a symlink whose target escapes the grant is refused by the VFS guard before any file is created (SEC-001)", async () => {
+  const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-perm-sym-in-" });
+  const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-perm-sym-out-" });
+  try {
+    await Deno.mkdir(`${ungranted}/real`);
+    await Deno.symlink(`${ungranted}/real`, `${granted}/link`);
+    const escapedReal = `${ungranted}/real/secret.db`;
+    const { code, out } = await runWorker(
+      [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
+      "symlink",
+      `${granted}/link/secret.db`,
+    );
+    assertEquals(code, 0);
+    assertEquals(out, "FAILED_CLOSED");
+    assertEquals(out.includes("LEAK"), false);
+    assertEquals(existsSync(escapedReal), false);
+  } finally {
+    await Deno.remove(granted, { recursive: true });
+    await Deno.remove(ungranted, { recursive: true });
+  }
+});
+
 const existsSync = (path: string): boolean => {
   try {
     Deno.statSync(path);

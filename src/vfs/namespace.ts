@@ -6,6 +6,7 @@ import type { OpenRegistry } from "./io.ts";
 import { syncDir } from "./io.ts";
 import type { ResultCodes } from "./errors.ts";
 import { isNotFound } from "./errors.ts";
+import { guardOpen, guardPath, isGranted } from "./guard.ts";
 
 const SQLITE_SYNC_DIR = 1;
 
@@ -73,6 +74,12 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.cantOpen;
+        // Canonicalize-then-recheck before any open touches the filesystem: Deno
+        // follows a symlink whose target escapes the grant (SEC-001), so refuse
+        // an escaped target here, before a create can land an empty file outside
+        // the grant. Covers every file the VFS opens — journal and wal are opened
+        // lazily mid-operation and pass through this same gate.
+        if (!isGranted(guardOpen(sqlite3, path, flags))) return rc.cantOpen;
         // os_unix.c sets UNIXFILE_DIRSYNC only when this open creates the dentry;
         // pre-stat under a CREATE flag so the first xSync makes that dentry durable.
         const createsDentry = (flags & capi.SQLITE_OPEN_CREATE) !== 0 && isAbsent(path);
@@ -95,6 +102,12 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.ok;
+        // Canonicalize the parent dir before unlinking: a removeSync through an
+        // in-grant directory symlink lands the unlink on an out-of-grant target
+        // (SEC-003). The final component is checked lexically — unlink removes the
+        // link itself, never its target, so a legitimate in-grant final symlink is
+        // not over-refused; only a symlinked directory component escapes.
+        if (!isGranted(guardPath(dirname(path), "write"))) return rc.ioErrDelete;
         try {
           Deno.removeSync(path);
         } catch (e) {
@@ -113,7 +126,11 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         let exists = false;
-        if (path !== null) {
+        // statSync follows the final symlink and returns the target's metadata, so
+        // an in-grant symlink to an out-of-grant file would leak its existence/size
+        // (SEC-003). Canonicalize the full path and report not-accessible (the
+        // contract's `pResOut = 0`) when it escapes — never the out-of-grant truth.
+        if (path !== null && isGranted(guardPath(path, "read"))) {
           try {
             Deno.statSync(path);
             exists = true;

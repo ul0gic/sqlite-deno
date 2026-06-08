@@ -4,6 +4,7 @@ import type { FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { IoMethods } from "./types.ts";
 import type { ResultCodes } from "./errors.ts";
 import { createLockMethods } from "./lock.ts";
+import { guardPath, isGranted } from "./guard.ts";
 
 const SECTOR_SIZE = 4096;
 const SYNC_DATAONLY = 0x10;
@@ -37,8 +38,16 @@ export interface OpenFile {
  * dir needs a read grant on the dir itself — a file-only grant does NOT cover
  * it (ENH-002); the denial fails closed as a result code and never widens the
  * grant. The handle is closed on every path.
+ *
+ * Canonicalize-then-recheck before the open: an in-grant directory symlink whose
+ * target escapes the grant would otherwise fsync an out-of-grant dir (SEC-003).
+ * A non-granted target throws — the caller's try/catch maps it to the op's IOERR,
+ * fail-closed, exactly as an `openSync` denial already does. The legitimate
+ * caller's dir is the db's own (already approved at open), so this never fires on
+ * the durability path; it only stops an escaped dir.
  */
 export const syncDir = (dir: string): void => {
+  if (!isGranted(guardPath(dir, "write"))) throw new Error("dir fsync target escapes the grant");
   using dirFd = Deno.openSync(dir, { read: true });
   dirFd.syncSync();
 };
