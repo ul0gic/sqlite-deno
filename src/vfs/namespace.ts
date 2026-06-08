@@ -135,6 +135,12 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
             Deno.statSync(path);
             exists = true;
           } catch (e) {
+            // Only a NotFound is "does not exist" → pResOut = 0. Any other stat
+            // failure (a real PermissionDenied at the FS, a transient I/O error)
+            // means existence is *undeterminable* — fail closed with
+            // SQLITE_IOERR_ACCESS, never a false "absent": a false absent on a hot
+            // -journal/-wal makes SQLite skip recovery and run on a torn database
+            // (DEC-006 §5, mirrors os_unix.c unixAccess: non-ENOENT → IOERR_ACCESS).
             if (!isNotFound(e)) throw e;
           }
         }
@@ -148,6 +154,14 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.cantOpen;
+        // An absolute path is returned normalized untouched; a relative one is
+        // anchored to the process cwd — @std/path `resolve` consults `Deno.cwd()`
+        // only on the relative branch (DBT-002, DEC-006 §6). The package expects
+        // absolute db paths (the public API and oo1.DB pass them), so the ambient
+        // cwd anchor is a documented fallback, never the hot path. `Deno.cwd()` is
+        // grant-free on the supported Deno; a future runtime gating it behind
+        // --allow-read would surface as a CANTOPEN on this branch only — do not
+        // "simplify" this into a path that assumes cwd is always free.
         const utf8 = encoder.encode(resolve(path));
         if (utf8.length + 1 > nOut) return rc.cantOpen;
         const heap = wasm.heap8u();
