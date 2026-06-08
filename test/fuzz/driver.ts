@@ -1,7 +1,7 @@
 import { openDatabase } from "../../src/database.ts";
 import type { Database, OpenOptions } from "../../src/database.ts";
 import { SqliteError } from "../../src/errors.ts";
-import type { FuzzMode, FuzzSeed } from "./model.ts";
+import type { FuzzMode, FuzzOp, FuzzSeed } from "./model.ts";
 import { asSeed } from "./model.ts";
 import { generateSequence } from "./generator.ts";
 import { execOp, settleStreams } from "./execute.ts";
@@ -45,19 +45,17 @@ export interface SequenceResult {
 }
 
 /**
- * Runs one generated sequence end-to-end against a freshly opened real database,
+ * Replays an explicit op list end-to-end against a freshly opened real database,
  * then checks every oracle property. The DB is disposed in `finally`; a throw
- * from dispose itself is the "dispose" property failing.
+ * from dispose itself is the "dispose" property failing. The shrinker drives this
+ * with arbitrary subsequences over a fresh path per candidate.
  */
-export const runSequence = async (
-  dir: string,
+export const runOps = async (
+  path: string,
   seed: FuzzSeed,
   mode: FuzzMode,
-  length: number,
-  explicitPath?: string,
+  ops: readonly FuzzOp[],
 ): Promise<SequenceResult> => {
-  const path = explicitPath ?? `${dir}/fuzz-${(seed >>> 0).toString(16)}-${mode}.db`;
-  const ops = generateSequence(seed, length);
   const db = await openDatabase(path, openOptionsFor(mode));
   let bodyError: unknown;
   try {
@@ -75,6 +73,21 @@ export const runSequence = async (
   }
   if (bodyError !== undefined) throw bodyError;
   return { seed, mode, ops: ops.length };
+};
+
+/**
+ * Runs one generated sequence end-to-end against a freshly opened real database,
+ * then checks every oracle property.
+ */
+export const runSequence = async (
+  dir: string,
+  seed: FuzzSeed,
+  mode: FuzzMode,
+  length: number,
+  explicitPath?: string,
+): Promise<SequenceResult> => {
+  const path = explicitPath ?? `${dir}/fuzz-${(seed >>> 0).toString(16)}-${mode}.db`;
+  return await runOps(path, seed, mode, generateSequence(seed, length));
 };
 
 export const runSeedAcrossModes = async (

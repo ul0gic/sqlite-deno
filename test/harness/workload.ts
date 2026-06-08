@@ -3,6 +3,8 @@ import { openDatabaseWithVfs } from "../../src/database.ts";
 import type { OpenOptions } from "../../src/database.ts";
 import type { CrashRecorder } from "./crash-vfs.ts";
 import type { Op } from "./oplog.ts";
+import type { ShapeStmt, WorkloadPlan } from "./workload-shape.ts";
+import { buildWorkloadPlan } from "./workload-shape.ts";
 
 export interface Commit {
   readonly opIndex: number;
@@ -33,6 +35,14 @@ export interface WorkloadSpec {
    * directory fsync is the os_unix.c step the dir-sync VFS variant honors.
    */
   readonly synchronous?: Synchronous;
+  /**
+   * When set, mixes a seeded property-generated op space (a hostile auxiliary
+   * table touched by UPDATE/DELETE inside each marker txn, plus VACUUM between
+   * txns) on top of the `kv` marker inserts. `kv` stays the durable witness the
+   * I2 oracle reads back, so the committed-set invariant remains checkable while
+   * the sweep covers more than sequential single-column inserts.
+   */
+  readonly shapeSeed?: number;
 }
 
 export type CommitSink = (value: number) => void;
@@ -54,18 +64,32 @@ export interface WorkloadDriver {
   ) => void;
 }
 
+const planFor = (spec: WorkloadSpec): WorkloadPlan | undefined =>
+  spec.shapeSeed === undefined ? undefined : buildWorkloadPlan(spec.shapeSeed);
+
+type EngineDb = InstanceType<Sqlite3["oo1"]["DB"]>;
+
+const runEngineStmt = (db: EngineDb, stmt: ShapeStmt): void => {
+  if (stmt.kind === "exec") db.exec(stmt.sql);
+  else db.exec({ sql: stmt.sql, bind: [...stmt.params] });
+};
+
 const writeViaEngine: WorkloadDriver["write"] = (sqlite3, recorder, spec, onCommit) => {
   const db = new sqlite3.oo1.DB(spec.dbName, "c", recorder.name);
+  const plan = planFor(spec);
   try {
     db.exec(`PRAGMA journal_mode=${spec.journalMode ?? "DELETE"}`);
     if (spec.synchronous !== undefined) db.exec(`PRAGMA synchronous=${spec.synchronous}`);
     db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
+    if (plan) { for (const s of plan.setup) runEngineStmt(db, s); }
     let value = 1;
     for (let t = 0; t < spec.txns; t++) {
+      if (plan) { for (const s of plan.betweenTxn(t)) runEngineStmt(db, s); }
       db.exec("BEGIN");
       for (let r = 0; r < spec.rowsPerTxn; r++) {
         db.exec({ sql: "INSERT INTO kv(v) VALUES ($v)", bind: { $v: value } });
       }
+      if (plan) { for (const s of plan.perTxn(t)) runEngineStmt(db, s); }
       db.exec("COMMIT");
       onCommit(value);
       value++;
@@ -75,17 +99,32 @@ const writeViaEngine: WorkloadDriver["write"] = (sqlite3, recorder, spec, onComm
   }
 };
 
+type PublicDb = ReturnType<typeof openDatabaseWithVfs>;
+
+const runPublicStmt = (db: PublicDb, stmt: ShapeStmt): void => {
+  if (stmt.kind === "exec") {
+    db.exec(stmt.sql);
+    return;
+  }
+  using prepared = db.prepare(stmt.sql);
+  prepared.run(...stmt.params);
+};
+
 const runPublicApiTxns = (
-  db: ReturnType<typeof openDatabaseWithVfs>,
+  db: PublicDb,
   spec: WorkloadSpec,
   onCommit: CommitSink,
 ): void => {
+  const plan = planFor(spec);
   db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
-  const insert = db.prepare("INSERT INTO kv(v) VALUES (?)");
+  if (plan) { for (const s of plan.setup) runPublicStmt(db, s); }
+  using insert = db.prepare("INSERT INTO kv(v) VALUES (?)");
   let value = 1;
   for (let t = 0; t < spec.txns; t++) {
+    if (plan) { for (const s of plan.betweenTxn(t)) runPublicStmt(db, s); }
     const tx = db.transaction();
     for (let r = 0; r < spec.rowsPerTxn; r++) insert.run(value);
+    if (plan) { for (const s of plan.perTxn(t)) runPublicStmt(db, s); }
     tx.commit();
     onCommit(value);
     value++;

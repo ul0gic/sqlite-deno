@@ -10,6 +10,9 @@ import {
   type WorkloadSpec,
 } from "./workload.ts";
 import { verifyReconstruction } from "./verify.ts";
+import { journalHasValidMagic } from "../fixtures/crash_sweep_harness.ts";
+
+export { journalHasValidMagic };
 
 const isJournal = (file: string): boolean => file.endsWith("-journal");
 
@@ -41,11 +44,6 @@ export const finalizationIndices = (
   }
   return out;
 };
-
-const MAGIC = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7] as const;
-
-export const journalHasValidMagic = (bytes: Uint8Array): boolean =>
-  bytes.length >= 8 && MAGIC.every((b, i) => bytes[i] === b);
 
 const issuedValues = (recorded: RecordedWorkload): ReadonlySet<number> => {
   const issued = new Set<number>();
