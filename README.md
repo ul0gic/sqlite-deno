@@ -152,15 +152,15 @@ deno run --allow-read=./data your_program.ts
 
 The grant is scoped to the database's **parent directory**, not the file alone, because the VFS
 canonicalizes paths before touching them (the symlink guard below) and a crash-safe commit fsyncs
-the directory — both of which read the directory path. A file-only grant still works for the plainest
-read path but **fails closed with a typed error** naming the grant it needs the moment it must
-canonicalize or directory-fsync; it never silently downgrades and never widens what you granted. The
-[durability caveat](#the-honest-durability-caveat-read-this) covers the write side.
+the directory — both of which read the directory path. A file-only grant still works for the
+plainest read path but **fails closed with a typed error** naming the grant it needs the moment it
+must canonicalize or directory-fsync; it never silently downgrades and never widens what you
+granted. The [durability caveat](#the-honest-durability-caveat-read-this) covers the write side.
 
 ### Symlink escape: the guard, and its one residual
 
 Deno's permission check is **lexical** — it checks the path you pass, not the canonical target. So a
-symlink that lives *inside* your grant but points *outside* it is followed by Deno (verified on Deno
+symlink that lives _inside_ your grant but points _outside_ it is followed by Deno (verified on Deno
 2.8.1), and naïvely that would let I/O land outside the granted prefix. The VFS closes this in
 userland: before any filesystem op it canonicalizes the path with `Deno.realPathSync` (resolving
 symlinked directory components, a symlinked final component, and the parent of a path being created)
@@ -171,11 +171,11 @@ read, deleted, or fsynced outside the grant**. This is the canonicalize-then-rec
 omits, applied uniformly to all four filesystem doors (open, delete, access, directory-sync).
 
 > **The one residual (honest):** a TOCTOU window exists between canonicalizing the path and opening
-> it. Exploiting it requires an attacker who already holds write access *into* the granted directory
+> it. Exploiting it requires an attacker who already holds write access _into_ the granted directory
 > — who can therefore already corrupt the database directly — and it cannot reach outside the grant
 > in any way that in-grant write access can't already. Tracked as
-> [SEC-002](https://github.com/ul0gic/sqlite-deno/issues/21) (Low); the complete fix is upstream Deno doing the
-> canonicalize-before-check itself.
+> [SEC-002](https://github.com/ul0gic/sqlite-deno/issues/21) (Low); the complete fix is upstream
+> Deno doing the canonicalize-before-check itself.
 
 ### The honest durability caveat, read this
 
@@ -392,8 +392,8 @@ every level), which is **provably correct by construction**, at the cost of seri
 > `openDatabase` itself, whose mode pragmas also take the lock) in a retry loop on
 > `SqliteBusyError`. All lock calls are non-blocking, so there is no OS deadlock. A `busyTimeout`
 > open option that would let SQLite block-and-retry for you — so callers don't hand-roll this — is a
-> tracked enhancement ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)); it is **not implemented yet**, so today
-> the retry loop is yours.
+> tracked enhancement ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)); it is **not
+> implemented yet**, so today the retry loop is yours.
 
 ### Mode 2, WAL: **single-process exclusive only**
 
@@ -432,12 +432,12 @@ axis is the `durability` option, and the two modes default it differently:
   behavior, not a corruption bug — `integrity_check` stays `ok`. Pass
   `{ mode: "wal", durability: "full" }` for power-loss durability in WAL.
 - **Directory-fsync durability is shipped and crash-proven on Linux for both modes** — rollback
-  *and* WAL (it makes journal creation/deletion survive a power cut). It needs the
+  _and_ WAL (it makes journal creation/deletion survive a power cut). It needs the
   **parent-directory** grant, see [the permission caveat](#the-honest-durability-caveat-read-this)
   above; under a file-only grant the package fails closed rather than silently dropping the sync.
 - **Platform support: Linux only, for the durability claim.** Linux directory-fsync durability is
-  crash-proven (rollback + WAL). **Windows** fsync semantics are **unverified** — there is no Windows
-  test rig yet, so do not rely on the durability guarantee there. **NFS and other networked
+  crash-proven (rollback + WAL). **Windows** fsync semantics are **unverified** — there is no
+  Windows test rig yet, so do not rely on the durability guarantee there. **NFS and other networked
   filesystems are explicitly unsupported**, same as native SQLite.
 - The crash proofs are model-bounded (a worst-legal-device power-loss model + Linux
   `strace`-verified primitives), **not** real-hardware power-cut testing. A hardware rig is a later
