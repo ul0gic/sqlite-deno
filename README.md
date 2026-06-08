@@ -94,7 +94,7 @@ That is the whole grant: no `--allow-ffi`, no `--allow-net`, no `--allow-env`.
 
 ```bash
 git clone <this-repo> && cd sqlite-deno
-deno task check     # fmt, lint, type-check, and the full proof suite (195 tests)
+deno task check     # fmt, lint, type-check, and the full proof suite (224 tests)
 ```
 
 - The public API lives in [`src/mod.ts`](./src/mod.ts) — `openDatabase` and the `Database` /
@@ -333,7 +333,7 @@ The correctness claims here are meant to be **executable rather than taken on fa
 them and check. The whole suite runs from a clean checkout:
 
 ```bash
-deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 195 tests
+deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 224 tests
 deno task test:soak    # Mode 1: N real OS processes, Jepsen bank, CPU-oversubscribed (env-gated)
 deno task test:soak:wal # Mode 2: multi-seed WAL crash sweep (env-gated)
 ```
@@ -388,12 +388,13 @@ every level), which is **provably correct by construction**, at the cost of seri
 "many readers XOR one writer" needs byte-range `fcntl` and is **v2**.
 
 > **The multi-process Mode-1 contract:** a contending caller gets a `SqliteBusyError` (the lock is
-> held), and the retry is the caller's — wrap the contended `db.transaction()` (and the
-> `openDatabase` itself, whose mode pragmas also take the lock) in a retry loop on
-> `SqliteBusyError`. All lock calls are non-blocking, so there is no OS deadlock. A `busyTimeout`
-> open option that would let SQLite block-and-retry for you — so callers don't hand-roll this — is a
-> tracked enhancement ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)); it is **not
-> implemented yet**, so today the retry loop is yours.
+> held). Pass a `busyTimeout` open option (milliseconds) to let SQLite block-and-retry the contended
+> lock for you — it is applied before the open-time mode pragmas, so it covers `openDatabase` itself
+> as well as later `db.transaction()` calls, and a multi-process caller no longer has to wrap the
+> open in its own retry. All lock calls are non-blocking, so there is no OS deadlock. The default is
+> `0` (immediate `SqliteBusyError`, fully backward-compatible); a non-zero timeout is not a
+> guarantee — a sufficiently contended serialized workload can still exhaust it, so a caller-side
+> retry loop on `SqliteBusyError` stays the ultimate backstop.
 
 ### Mode 2, WAL: **single-process exclusive only**
 
@@ -552,9 +553,11 @@ is Phase 10.
   constrained at open (illegal combos unrepresentable — `{ readonly: true, mode: "wal" }` is
   rejected), so a caller cannot accidentally leave the tested engine envelope. No user-defined SQL
   functions in v1 (that JS-callback-reentrancy surface is one place native engines have historically
-  hit use-after-free; it waits until the reentrancy model is tested). A `busyTimeout` open
-  affordance, so multi-process Mode-1 callers need not hand-roll `SqliteBusyError` retry, is tracked
-  ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)) but not yet built.
+  hit use-after-free; it waits until the reentrancy model is tested). Two additive `OpenOptions`
+  shipped in the post-Phase-8 burndown: a `busyTimeout` (ms) so multi-process Mode-1 callers can let
+  SQLite block-and-retry instead of hand-rolling `SqliteBusyError` retry
+  ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)), and a `signal` (`AbortSignal`) to
+  cancel a slow cold-start open ([ENH-004](https://github.com/ul0gic/sqlite-deno/issues/17)).
 - **Phase 8, Full L1–L5 test suite — done.** Functional, permission, crash/durability, concurrency,
   and a generative SQL fuzzer, all driving the shipped `openDatabase` surface (the L3/L4/WAL
   harnesses are re-pointed at the public path). L6, the reproducible-build byte-compare, lands with
