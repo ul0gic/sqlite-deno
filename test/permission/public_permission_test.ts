@@ -1,9 +1,9 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 
-const WORKER = fromFileUrl(import.meta.resolve("./fixtures/public_api_worker.ts"));
-const SRC = fromFileUrl(import.meta.resolve("../src/"));
-const CONFIG = fromFileUrl(import.meta.resolve("../deno.json"));
+const WORKER = fromFileUrl(import.meta.resolve("../fixtures/public_api_worker.ts"));
+const SRC = fromFileUrl(import.meta.resolve("../../src/"));
+const CONFIG = fromFileUrl(import.meta.resolve("../../deno.json"));
 
 interface Run {
   readonly code: number;
@@ -97,5 +97,48 @@ Deno.test("openDatabase fails closed with no filesystem grant for the db path", 
     assertEquals(out.includes("LEAK"), false);
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("openDatabase through a parent-directory traversal out of the grant fails closed without a usable db", async () => {
+  const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-trav-in-" });
+  const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-trav-out-" });
+  try {
+    const escaped = `${granted}/../${ungranted.split("/").pop()}/traversed.db`;
+    const { code, out } = await runWorker(
+      [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
+      "traversal",
+      escaped,
+    );
+    assertEquals(code, 0);
+    assert(out === "DENIED_RAW" || out === "DENIED_TYPED" || out === "FAILED_CLOSED");
+    assertEquals(out.includes("LEAK"), false);
+    assertEquals(existsSync(`${ungranted}/traversed.db`), false);
+  } finally {
+    await Deno.remove(granted, { recursive: true });
+    await Deno.remove(ungranted, { recursive: true });
+  }
+});
+
+Deno.test("openDatabase through a symlink escaping the grant creates only an empty file outside, never a populated db (SEC-001)", async () => {
+  const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-sym-in-" });
+  const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-sym-out-" });
+  try {
+    await Deno.mkdir(`${ungranted}/real`);
+    await Deno.symlink(`${ungranted}/real`, `${granted}/link`);
+    const escapedReal = `${ungranted}/real/secret.db`;
+    const { code, out } = await runWorker(
+      [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
+      "symlink",
+      `${granted}/link/secret.db`,
+    );
+    assertEquals(code, 0);
+    assertEquals(out, "FAILED_CLOSED");
+    assertEquals(out.includes("LEAK"), false);
+    assertEquals(existsSync(`${escapedReal}-journal`), false);
+    if (existsSync(escapedReal)) assertEquals(Deno.statSync(escapedReal).size, 0);
+  } finally {
+    await Deno.remove(granted, { recursive: true });
+    await Deno.remove(ungranted, { recursive: true });
   }
 });

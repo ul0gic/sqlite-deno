@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertInstanceOf } from "@std/assert";
-import { loadSqlite3 } from "../src/glue.ts";
+import { loadSqlite3 } from "../../src/glue.ts";
 import {
   SqliteBusyError,
   SqliteCantOpenError,
@@ -10,8 +10,8 @@ import {
   SqliteRangeError,
   SqliteReadonlyError,
   toSqliteError,
-} from "../src/errors.ts";
-import type { DbPtr } from "../src/wasm/ptr.ts";
+} from "../../src/errors.ts";
+import type { DbPtr } from "../../src/wasm/ptr.ts";
 
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;

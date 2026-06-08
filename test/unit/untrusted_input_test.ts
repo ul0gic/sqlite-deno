@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertInstanceOf, assertRejects, assertThrows } from "@std/assert";
-import { openDatabase } from "../src/database.ts";
-import { SqliteCorruptError, SqliteMisuseError } from "../src/errors.ts";
+import { openDatabase } from "../../src/database.ts";
+import { SqliteCorruptError, SqliteMisuseError } from "../../src/errors.ts";
 
 const PAGE_SIZE = 4096;
 

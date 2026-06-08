@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { openDatabase } from "../src/database.ts";
-import { SqliteMisuseError } from "../src/errors.ts";
-import { createTransactionFactory } from "../src/transaction.ts";
+import { openDatabase } from "../../src/database.ts";
+import { SqliteMisuseError } from "../../src/errors.ts";
+import { createTransactionFactory } from "../../src/transaction.ts";
 
 const SQLITE_MISUSE = 21;
 

@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertInstanceOf, assertRejects, assertThrows } from "@std/assert";
-import { openDatabase } from "../src/database.ts";
-import { SqliteError, SqliteMisuseError } from "../src/errors.ts";
+import { openDatabase } from "../../src/database.ts";
+import { SqliteError, SqliteMisuseError } from "../../src/errors.ts";
 
 const withDir = async (fn: (dir: string) => Promise<void>): Promise<void> => {
   const dir = await Deno.makeTempDir({ prefix: "sqlite-deno-stmt-" });

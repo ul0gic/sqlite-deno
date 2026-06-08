@@ -143,9 +143,19 @@ export const bindValue = (
     return capi.sqlite3_bind_int64(stmt, idx, value);
   }
   if (typeof value === "number") {
-    return Number.isInteger(value)
-      ? capi.sqlite3_bind_int64(stmt, idx, BigInt(value))
-      : capi.sqlite3_bind_double(stmt, idx, value);
+    if (!Number.isInteger(value)) return capi.sqlite3_bind_double(stmt, idx, value);
+    // An integer-valued double can exceed signed int64 (e.g. `1e308`); compare as
+    // bigint because the numeric bounds lose precision near 2^63. Mirror the bigint
+    // path's rejection so both numeric routes reject out-of-range identically.
+    const i64 = BigInt(value);
+    if (i64 < MIN_I64 || i64 > MAX_I64) {
+      throw new SqliteMisuseError(
+        `number out of int64 range: ${value}`,
+        capi.SQLITE_MISUSE,
+        capi.SQLITE_MISUSE,
+      );
+    }
+    return capi.sqlite3_bind_int64(stmt, idx, i64);
   }
   if (typeof value === "string") return bindText(sqlite3, stmt, idx, value);
   if (value instanceof Uint8Array) return bindBlob(sqlite3, stmt, idx, value);
