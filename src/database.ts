@@ -49,6 +49,23 @@ export type OpenMode =
 export type OpenOptions = OpenMode & {
   /** Open read-only; never create. A write then fails with `SqliteReadonlyError`. */
   readonly readonly?: boolean;
+  /**
+   * Milliseconds SQLite blocks-and-retries on a contended lock before surfacing
+   * `SqliteBusyError`. Defaults to `0` — immediate `SQLITE_BUSY`, the v1 behavior.
+   * Applied before the open-time `configure` pragmas, so a Mode-1 caller need not
+   * wrap `openDatabase` in its own open retry. Must be a non-negative integer;
+   * anything else throws `SqliteMisuseError`. A timeout is not a guarantee: a
+   * sufficiently contended serialized workload can exhaust it and still surface
+   * `SqliteBusyError`, so a caller's own retry loop stays the ultimate backstop.
+   */
+  readonly busyTimeout?: number;
+  /**
+   * Cancels a slow open (wasm cold-start, VFS open, the configure pragmas). If
+   * already aborted the open rejects with the signal's reason; otherwise it is
+   * checked between the awaitable stages. Has no effect once the `Database`
+   * resolves — dispose it to release the connection.
+   */
+  readonly signal?: AbortSignal;
 };
 
 /**
@@ -220,6 +237,26 @@ const createDatabase = (sqlite3: Sqlite3, handle: DbPtr): Database => {
   return db;
 };
 
+const validateBusyTimeout = (opts: OpenOptions): void => {
+  const { busyTimeout } = opts;
+  if (busyTimeout === undefined) return;
+  if (!Number.isInteger(busyTimeout) || busyTimeout < 0) {
+    throw new SqliteMisuseError(
+      `busyTimeout must be a non-negative integer of milliseconds; got ${busyTimeout}`,
+      SQLITE_MISUSE,
+      SQLITE_MISUSE,
+    );
+  }
+};
+
+const applyBusyTimeout = (raw: RawDb, opts: OpenOptions): void => {
+  const ms = opts.busyTimeout ?? 0;
+  if (ms === 0) return;
+  const { sqlite3, handle } = raw;
+  const rc = sqlite3.capi.sqlite3_busy_timeout(handle, ms);
+  if (rc !== sqlite3.capi.SQLITE_OK) throw toSqliteError(rc, sqlite3, handle);
+};
+
 const rejectReadonlyWal = (opts: OpenOptions): void => {
   if (opts.readonly === true && opts.mode === "wal") {
     // A read-only connection cannot run `journal_mode=WAL`, so honoring the
@@ -253,9 +290,12 @@ export const openDatabaseWithVfs = (
   opts: OpenOptions = {},
 ): Database => {
   rejectReadonlyWal(opts);
+  validateBusyTimeout(opts);
   const handle = openHandle(sqlite3, path, vfsName, opts);
+  const raw: RawDb = { sqlite3, handle };
   try {
-    configure({ sqlite3, handle }, opts);
+    applyBusyTimeout(raw, opts);
+    configure(raw, opts);
   } catch (e) {
     sqlite3.capi.sqlite3_close_v2(handle);
     throw e;
@@ -274,9 +314,14 @@ export const openDatabase = async (
   path: string,
   opts: OpenOptions = {},
 ): Promise<Database> => {
+  const { signal } = opts;
+  signal?.throwIfAborted();
   rejectReadonlyWal(opts);
+  validateBusyTimeout(opts);
   const sqlite3 = await loadSqlite3();
+  signal?.throwIfAborted();
   installDenoVfs(sqlite3);
   preflightGrant(sqlite3, path, opts);
+  signal?.throwIfAborted();
   return openDatabaseWithVfs(sqlite3, path, DENO_VFS_NAME, opts);
 };
