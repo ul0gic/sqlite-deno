@@ -1,5 +1,7 @@
 import type { Sqlite3 } from "../../src/glue.ts";
+import { openDatabase } from "../../src/database.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "../../src/vfs/deno.ts";
+import type { SqlValue } from "../../src/marshal.ts";
 import type { FileImage } from "./oplog.ts";
 import type { CommittedSets } from "./wal-workload.ts";
 
@@ -8,6 +10,17 @@ export interface WalVerifyResult {
   readonly detail: string;
   readonly present: ReadonlySet<number>;
 }
+
+/**
+ * Owns *how* a reconstructed WAL image is reopened and read back. The engine
+ * floor opens `oo1.DB` in exclusive WAL mode directly; the public driver reopens
+ * through the literal `openDatabase(path, { mode: "wal" })`, which runs WAL
+ * recovery + the exclusive-locking envelope exactly as a real reopen would.
+ */
+export type WalReadbackDriver = {
+  readonly label: string;
+  readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;
+};
 
 const baseName = (file: string): string => file.replace(/^.*\//, "");
 
@@ -37,7 +50,7 @@ const materialize = (
   return dbPath;
 };
 
-const readPresent = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
+const readPresentViaEngine = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
   const present = new Set<number>();
   const db = new sqlite3.oo1.DB(dbPath, "w", DENO_VFS_NAME);
   try {
@@ -62,6 +75,41 @@ const readPresent = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
     db.close();
   }
   return present;
+};
+
+const asNumber = (v: SqlValue): number => {
+  if (typeof v !== "number") throw new Error(`torn row value: ${String(v)}`);
+  return v;
+};
+
+const readPresentViaPublicApi = async (
+  _sqlite3: Sqlite3,
+  dbPath: string,
+): Promise<Set<number>> => {
+  const present = new Set<number>();
+  using db = await openDatabase(dbPath, { mode: "wal" });
+  const integrity = db.prepare<{ integrity_check: SqlValue }>("PRAGMA integrity_check").get();
+  if (integrity?.integrity_check !== "ok") {
+    throw new Error(`integrity_check=${String(integrity?.integrity_check)}`);
+  }
+  const tables = db.prepare<{ n: SqlValue }>(
+    "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='kv'",
+  ).get();
+  if (asNumber(tables?.n ?? 0) !== 1) return present;
+  for (const row of db.prepare<{ v: SqlValue }>("SELECT v FROM kv ORDER BY v").all()) {
+    present.add(asNumber(row.v));
+  }
+  return present;
+};
+
+export const ENGINE_WAL_READBACK: WalReadbackDriver = {
+  label: "engine",
+  readPresent: readPresentViaEngine,
+};
+
+export const PUBLIC_API_WAL_READBACK: WalReadbackDriver = {
+  label: "public-api",
+  readPresent: readPresentViaPublicApi,
 };
 
 const checkInvariants = (present: ReadonlySet<number>, sets: CommittedSets): WalVerifyResult => {
@@ -97,14 +145,19 @@ const checkInvariants = (present: ReadonlySet<number>, sets: CommittedSets): Wal
  * image is recovered a second time with a stray `-shm` planted before reopen —
  * the recovered value set must be identical, proving the `-shm` is a pure cache.
  */
-export const verifyWalReconstruction = (
+export const verifyWalReconstruction = async (
   sqlite3: Sqlite3,
   dir: string,
   dbName: string,
   image: Map<string, FileImage>,
   sets: CommittedSets,
-  opts: { readonly assertShmIrrelevant: boolean } = { assertShmIrrelevant: false },
-): WalVerifyResult => {
+  opts: {
+    readonly assertShmIrrelevant?: boolean;
+    readonly readbackDriver?: WalReadbackDriver;
+  } = {},
+): Promise<WalVerifyResult> => {
+  const assertShmIrrelevant = opts.assertShmIrrelevant ?? false;
+  const driver = opts.readbackDriver ?? ENGINE_WAL_READBACK;
   installDenoVfs(sqlite3);
   const dbPath = materialize(dir, dbName, image);
   const shmPath = `${dbPath}-shm`;
@@ -114,7 +167,7 @@ export const verifyWalReconstruction = (
 
   let present: Set<number>;
   try {
-    present = readPresent(sqlite3, dbPath);
+    present = await driver.readPresent(sqlite3, dbPath);
   } catch (e) {
     return {
       ok: false,
@@ -124,12 +177,12 @@ export const verifyWalReconstruction = (
   }
 
   const base = checkInvariants(present, sets);
-  if (!base.ok || !opts.assertShmIrrelevant) return base;
+  if (!base.ok || !assertShmIrrelevant) return base;
 
   Deno.writeFileSync(shmPath, new Uint8Array(SHM_STRAY_SIZE));
   let withShm: Set<number>;
   try {
-    withShm = readPresent(sqlite3, dbPath);
+    withShm = await driver.readPresent(sqlite3, dbPath);
   } catch (e) {
     return {
       ok: false,

@@ -57,13 +57,13 @@ const isStrictPrefix = (present: readonly number[], issued: readonly number[]): 
  * the test can assert both the prefix property and that at least one corruption
  * actually drops a committed value (a vacuous all-survive run proves nothing).
  */
-export const runMidLogCorruption = (
+export const runMidLogCorruption = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   dir: string,
   spec: WalWorkloadSpec,
   seed: number,
-): CorruptionResult => {
+): Promise<CorruptionResult> => {
   const recorded = runWalWorkload(sqlite3, recorder, spec);
   const issued = recorded.commits.map((c) => c.value);
   const k = lastWalIntactIndex(recorded.ops);
@@ -87,7 +87,7 @@ export const runMidLogCorruption = (
     const image = new Map<string, FileImage>(clean.image);
     image.set(walFile, { bytes: corrupted, exists: true });
 
-    const result = verifyWalReconstruction(
+    const result = await verifyWalReconstruction(
       sqlite3,
       dir,
       recorded.dbName,

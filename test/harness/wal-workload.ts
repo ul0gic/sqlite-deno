@@ -1,4 +1,5 @@
 import type { Sqlite3 } from "../../src/glue.ts";
+import { openDatabaseWithVfs } from "../../src/database.ts";
 import type { CrashRecorder } from "./crash-vfs.ts";
 import type { Op } from "./oplog.ts";
 import type { Synchronous } from "./workload.ts";
@@ -24,6 +25,92 @@ export interface WalWorkloadSpec {
   readonly synchronous: Synchronous;
 }
 
+export type WalCommitSink = (value: number) => void;
+
+/**
+ * Owns *how* the WAL workload reaches the engine — directly via `oo1.DB` with the
+ * hand-written `locking_mode=EXCLUSIVE`/`journal_mode=WAL` pragma sequence (the
+ * engine floor), or through the public `openDatabaseWithVfs` seam at
+ * `{ mode: "wal", durability }` (the shipped path). Either way the driver must
+ * leave WAL engaged with no `-shm` on disk; the recording and sync-coverage
+ * machinery downstream is driver-agnostic.
+ */
+export interface WalWorkloadDriver {
+  readonly label: string;
+  readonly write: (
+    sqlite3: Sqlite3,
+    recorder: CrashRecorder,
+    spec: WalWorkloadSpec,
+    onCommit: WalCommitSink,
+  ) => void;
+}
+
+const writeViaEngine: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onCommit) => {
+  const db = new sqlite3.oo1.DB(spec.dbName, "c", recorder.name);
+  try {
+    db.exec("PRAGMA locking_mode=EXCLUSIVE");
+    const mode = db.selectValue("PRAGMA journal_mode=WAL");
+    if (mode !== "wal") throw new Error(`expected journal_mode=wal, got ${String(mode)}`);
+    db.exec(`PRAGMA synchronous=${spec.synchronous}`);
+    db.exec("PRAGMA wal_autocheckpoint=0");
+    db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
+    let value = 1;
+    for (let t = 0; t < spec.txns; t++) {
+      db.exec("BEGIN");
+      for (let r = 0; r < spec.rowsPerTxn; r++) {
+        db.exec({ sql: "INSERT INTO kv(v) VALUES ($v)", bind: { $v: value } });
+      }
+      db.exec("COMMIT");
+      onCommit(value);
+      value++;
+    }
+  } finally {
+    db.close();
+  }
+};
+
+const durabilityOf = (sync: Synchronous): "normal" | "full" =>
+  sync === "NORMAL" ? "normal" : "full";
+
+const writeViaPublicApi: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onCommit) => {
+  using db = openDatabaseWithVfs(sqlite3, spec.dbName, recorder.name, {
+    mode: "wal",
+    durability: durabilityOf(spec.synchronous),
+  });
+  const journal = db.prepare<{ journal_mode: string }>("PRAGMA journal_mode").get();
+  if (journal?.journal_mode !== "wal") {
+    throw new Error(
+      `WAL did not engage through the public seam (journal_mode=${String(journal?.journal_mode)})`,
+    );
+  }
+  db.exec("PRAGMA wal_autocheckpoint=0");
+  db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
+  const insert = db.prepare("INSERT INTO kv(v) VALUES (?)");
+  let value = 1;
+  for (let t = 0; t < spec.txns; t++) {
+    const tx = db.transaction();
+    for (let r = 0; r < spec.rowsPerTxn; r++) insert.run(value);
+    tx.commit();
+    onCommit(value);
+    value++;
+  }
+};
+
+/** Drives the WAL workload straight through `oo1.DB` (engine floor). */
+export const ENGINE_WAL_DRIVER: WalWorkloadDriver = { label: "engine", write: writeViaEngine };
+
+/**
+ * Drives the WAL workload through the public `openDatabaseWithVfs` seam at
+ * `{ mode: "wal", durability }` (durability maps from the spec's `synchronous`):
+ * the shipped envelope runs `locking_mode=EXCLUSIVE` + `journal_mode=WAL` +
+ * `synchronous`, and `Database.prepare`/`run` + the savepoint `transaction()`
+ * carry the writes. Proves WAL recovery over the literal shipped surface.
+ */
+export const PUBLIC_API_WAL_DRIVER: WalWorkloadDriver = {
+  label: "public-api",
+  write: writeViaPublicApi,
+};
+
 const COMMIT_FRAME_NOT_YET_SYNCED = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -46,30 +133,13 @@ export const runWalWorkload = (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   spec: WalWorkloadSpec,
+  driver: WalWorkloadDriver = ENGINE_WAL_DRIVER,
 ): RecordedWalWorkload => {
   recorder.reset();
   const rawCommits: { opIndex: number; value: number }[] = [];
-  const db = new sqlite3.oo1.DB(spec.dbName, "c", recorder.name);
-  try {
-    db.exec("PRAGMA locking_mode=EXCLUSIVE");
-    const mode = db.selectValue("PRAGMA journal_mode=WAL");
-    if (mode !== "wal") throw new Error(`expected journal_mode=wal, got ${String(mode)}`);
-    db.exec(`PRAGMA synchronous=${spec.synchronous}`);
-    db.exec("PRAGMA wal_autocheckpoint=0");
-    db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
-    let value = 1;
-    for (let t = 0; t < spec.txns; t++) {
-      db.exec("BEGIN");
-      for (let r = 0; r < spec.rowsPerTxn; r++) {
-        db.exec({ sql: "INSERT INTO kv(v) VALUES ($v)", bind: { $v: value } });
-      }
-      db.exec("COMMIT");
-      rawCommits.push({ opIndex: recorder.ops.length, value });
-      value++;
-    }
-  } finally {
-    db.close();
-  }
+  driver.write(sqlite3, recorder, spec, (value) => {
+    rawCommits.push({ opIndex: recorder.ops.length, value });
+  });
 
   const ops = [...recorder.ops];
   const commits = rawCommits.map((c) => ({

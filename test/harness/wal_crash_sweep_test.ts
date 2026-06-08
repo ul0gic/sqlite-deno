@@ -1,54 +1,25 @@
 import { assert, assertEquals } from "@std/assert";
-import { loadSqlite3, type Sqlite3 } from "../../src/glue.ts";
-import { installCrashVfs } from "./crash-vfs.ts";
-import { runWalSweep, type WalSweepFailure } from "./wal-sweep.ts";
+import { runWalSweep } from "./wal-sweep.ts";
 import {
   corruptionViolations,
   droppedAnyCommitted,
   runMidLogCorruption,
 } from "./wal-corruption.ts";
 import { CHECKPOINT_MODES, runCheckpointCrash } from "./wal-checkpoint.ts";
-import { WAL_VARIANTS } from "./wal-reconstruct.ts";
-
-const SOAK = Deno.env.get("SQLITE_DENO_SOAK") === "1";
-
-const SEEDS = SOAK
-  ? [1, 7, 1337, 90210, 2654435761, 0x5eed, 0xc0ffee, 0xdecafbad, 42, 86753]
-  : [1, 7, 1337];
-const TXNS = SOAK ? 8 : 4;
-const ROWS_PER_TXN = SOAK ? 4 : 2;
-const RECON_PER_POINT = SOAK ? 8 : WAL_VARIANTS.length;
-const CKPT_RECON = SOAK ? 8 : 6;
-
-const withCrashVfs = async <T>(
-  vfsName: string,
-  realSync: boolean,
-  fn: (
-    sqlite3: Sqlite3,
-    recorder: ReturnType<typeof installCrashVfs>,
-    dir: string,
-  ) => T | Promise<T>,
-): Promise<T> => {
-  const sqlite3 = await loadSqlite3();
-  const recorder = installCrashVfs(sqlite3, { vfsName, realSync, dirSync: true });
-  const dir = await Deno.makeTempDir({ prefix: "wal-crash-sweep-" });
-  try {
-    return await fn(sqlite3, recorder, dir);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-};
-
-const fmtFailures = (failures: readonly WalSweepFailure[]): string =>
-  failures
-    .slice(0, 10)
-    .map((f) => `k=${f.crashIndex} ${f.content}/${f.tail} subSeed=${f.subSeed}: ${f.detail}`)
-    .join("\n");
+import {
+  CKPT_RECON,
+  fmtFailures,
+  RECON_PER_POINT,
+  ROWS_PER_TXN,
+  SEEDS,
+  TXNS,
+  withCrashVfs,
+} from "./wal-sweep-fixtures.ts";
 
 Deno.test("WAL crash sweep at synchronous=FULL: every crash point keeps committed txns and integrity (I1+I2+I3)", async () => {
-  await withCrashVfs("wal-sweep-full", true, (sqlite3, recorder, dir) => {
+  await withCrashVfs("wal-sweep-full", true, async (sqlite3, recorder, dir) => {
     for (const seed of SEEDS) {
-      const res = runWalSweep(sqlite3, recorder, dir, {
+      const res = await runWalSweep(sqlite3, recorder, dir, {
         spec: { txns: TXNS, rowsPerTxn: ROWS_PER_TXN, dbName: "/wal-full.db", synchronous: "FULL" },
         seed,
         reconstructionsPerPoint: RECON_PER_POINT,
@@ -75,9 +46,9 @@ Deno.test("WAL crash sweep at synchronous=FULL: every crash point keeps committe
 });
 
 Deno.test("WAL crash sweep at synchronous=NORMAL: integrity-safe, trailing-unsynced commits may be absent (no I2 violation)", async () => {
-  await withCrashVfs("wal-sweep-normal", true, (sqlite3, recorder, dir) => {
+  await withCrashVfs("wal-sweep-normal", true, async (sqlite3, recorder, dir) => {
     for (const seed of SEEDS) {
-      const res = runWalSweep(sqlite3, recorder, dir, {
+      const res = await runWalSweep(sqlite3, recorder, dir, {
         spec: {
           txns: TXNS,
           rowsPerTxn: ROWS_PER_TXN,
@@ -100,8 +71,8 @@ Deno.test("WAL crash sweep at synchronous=NORMAL: integrity-safe, trailing-unsyn
 });
 
 Deno.test("negative control: a lying no-op xSync drops the -wal commit frame and is CAUGHT (I1/I2 fail)", async () => {
-  await withCrashVfs("wal-sweep-noopsync", false, (sqlite3, recorder, dir) => {
-    const res = runWalSweep(sqlite3, recorder, dir, {
+  await withCrashVfs("wal-sweep-noopsync", false, async (sqlite3, recorder, dir) => {
+    const res = await runWalSweep(sqlite3, recorder, dir, {
       spec: { txns: 4, rowsPerTxn: 2, dbName: "/wal-lie.db", synchronous: "FULL" },
       seed: 0xbad5,
       reconstructionsPerPoint: 8,
@@ -120,8 +91,8 @@ Deno.test("negative control: a lying no-op xSync drops the -wal commit frame and
 });
 
 Deno.test("negative control: a corrupt mid-log frame checksum stops recovery at the break (no value from past it leaks)", async () => {
-  await withCrashVfs("wal-midlog-corrupt", true, (sqlite3, recorder, dir) => {
-    const res = runMidLogCorruption(
+  await withCrashVfs("wal-midlog-corrupt", true, async (sqlite3, recorder, dir) => {
+    const res = await runMidLogCorruption(
       sqlite3,
       recorder,
       dir,
@@ -145,9 +116,9 @@ Deno.test("negative control: a corrupt mid-log frame checksum stops recovery at 
 });
 
 Deno.test("checkpoint-crash: crashing during PASSIVE/FULL/RESTART/TRUNCATE recovers consistently (I1+I2)", async () => {
-  await withCrashVfs("wal-checkpoint-crash", true, (sqlite3, recorder, dir) => {
+  await withCrashVfs("wal-checkpoint-crash", true, async (sqlite3, recorder, dir) => {
     for (const mode of CHECKPOINT_MODES) {
-      const res = runCheckpointCrash(sqlite3, recorder, dir, {
+      const res = await runCheckpointCrash(sqlite3, recorder, dir, {
         dbName: `/ckpt-${mode}.db`,
         mode,
         preCommits: 4,
@@ -174,8 +145,8 @@ Deno.test("checkpoint-crash: crashing during PASSIVE/FULL/RESTART/TRUNCATE recov
 });
 
 Deno.test("salt-advance anti-stale-replay: post-TRUNCATE frames never resurrect a pre-checkpoint frame", async () => {
-  await withCrashVfs("wal-salt-advance", true, (sqlite3, recorder, dir) => {
-    const res = runCheckpointCrash(sqlite3, recorder, dir, {
+  await withCrashVfs("wal-salt-advance", true, async (sqlite3, recorder, dir) => {
+    const res = await runCheckpointCrash(sqlite3, recorder, dir, {
       dbName: "/salt-advance.db",
       mode: "TRUNCATE",
       preCommits: 3,

@@ -104,12 +104,12 @@ const driveCheckpointRun = (
  * mis-applied after the reset — a resurfacing stale frame would corrupt
  * integrity or surface a phantom, both of which I1/I2 catch.
  */
-export const runCheckpointCrash = (
+export const runCheckpointCrash = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   dir: string,
   cfg: CheckpointCrashConfig,
-): CheckpointCrashResult => {
+): Promise<CheckpointCrashResult> => {
   const run = driveCheckpointRun(sqlite3, recorder, cfg);
   const recorded = { ops: run.ops, commits: run.commits, dbName: cfg.dbName, synchronous: SYNC };
   const failures: CheckpointCrashFailure[] = [];
@@ -128,7 +128,7 @@ export const runCheckpointCrash = (
       const subSeed = (cfg.seed * 2_246_822_519 + k * 97 + i) >>> 0;
       const rng = createRng(subSeed);
       const { image } = reconstructWal(run.ops, k, variant.content, variant.tail, rng);
-      const result = verifyWalReconstruction(sqlite3, dir, cfg.dbName, image, sets);
+      const result = await verifyWalReconstruction(sqlite3, dir, cfg.dbName, image, sets);
       reconstructions++;
       if (!result.ok) {
         failures.push({

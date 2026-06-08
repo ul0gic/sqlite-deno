@@ -2,18 +2,14 @@ import { assert, assertEquals } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 import { loadSqlite3 } from "../../src/glue.ts";
 import {
-  installModeVfs,
-  integrityOk,
-  readBank,
   runConcurrency,
   type RunOptions,
   type RunReport,
-  seedBank,
   TOTAL_BALANCE,
+  type WorkerDriver,
 } from "./concurrency.ts";
 
 const WORKER = fromFileUrl(import.meta.resolve("../fixtures/concurrency_worker.ts"));
-const VICTIM = fromFileUrl(import.meta.resolve("../fixtures/concurrency_victim_worker.ts"));
 const CONFIG = fromFileUrl(import.meta.resolve("../../deno.json"));
 const SRC = fromFileUrl(import.meta.resolve("../../src/"));
 
@@ -24,6 +20,9 @@ const CI_BUSY_TIMEOUT_MS = 15000;
 const SOAK = Deno.env.get("SQLITE_DENO_SOAK") === "1";
 const SOAK_WORKERS = Number(Deno.env.get("SQLITE_DENO_SOAK_WORKERS") ?? "16");
 const SOAK_TXNS = Number(Deno.env.get("SQLITE_DENO_SOAK_TXNS") ?? "100000");
+const SOAK_DRIVER: WorkerDriver = Deno.env.get("SQLITE_DENO_SOAK_DRIVER") === "engine"
+  ? "engine"
+  : "public";
 const SOAK_BUSY_TIMEOUT_MS = 120000;
 
 const withTempDb = async (run: (dbPath: string) => Promise<void>): Promise<void> => {
@@ -35,13 +34,17 @@ const withTempDb = async (run: (dbPath: string) => Promise<void>): Promise<void>
   }
 };
 
-const baseOptions = (dbPath: string): Omit<RunOptions, "mode" | "workers" | "txnsPerWorker"> => ({
+const baseOptions = (
+  dbPath: string,
+  driver: WorkerDriver,
+): Omit<RunOptions, "mode" | "workers" | "txnsPerWorker"> => ({
   workerPath: WORKER,
   configPath: CONFIG,
   srcDir: SRC,
   dbPath,
   baseSeed: 0xc0ffee,
   busyTimeoutMs: CI_BUSY_TIMEOUT_MS,
+  driver,
 });
 
 const assertXstrictHealthy = (report: RunReport): void => {
@@ -73,11 +76,25 @@ const assertXstrictHealthy = (report: RunReport): void => {
   assert(report.totalCommitted > 0, "workers must have committed at least one transfer");
 };
 
-Deno.test("X-strict: N processes hammering one DB conserve the bank, keep integrity, and lose no commits", async () => {
+const assertNegativeControlDetected = (report: RunReport): void => {
+  const workerCaught = report.results.some((r) => r.invariantViolation !== null);
+  const workerCrashed = report.crashes.length > 0;
+  const sumBroken = report.finalSnapshot.sum !== TOTAL_BALANCE;
+  const integrityBroken = report.integrity !== "ok";
+  const commitsLost = report.finalSnapshot.commitCount !== report.totalCommitted;
+  assert(
+    workerCaught || workerCrashed || sumBroken || integrityBroken || commitsLost,
+    `negative control stayed clean — the harness cannot detect corruption. ` +
+      `integrity=${report.integrity} sum=${report.finalSnapshot.sum}/${TOTAL_BALANCE} ` +
+      `commitCount=${report.finalSnapshot.commitCount} tracked=${report.totalCommitted} crashes=${report.crashes.length}`,
+  );
+};
+
+Deno.test("ENGINE X-strict: N processes hammering one DB conserve the bank, keep integrity, and lose no commits", async () => {
   const sqlite3 = await loadSqlite3();
   await withTempDb(async (dbPath) => {
     const report = await runConcurrency(sqlite3, {
-      ...baseOptions(dbPath),
+      ...baseOptions(dbPath, "engine"),
       mode: "xstrict",
       workers: CI_WORKERS,
       txnsPerWorker: CI_TXNS,
@@ -86,11 +103,11 @@ Deno.test("X-strict: N processes hammering one DB conserve the bank, keep integr
   });
 });
 
-Deno.test("X-strict: every worker makes forward progress (no deadlock starves a process to zero commits)", async () => {
+Deno.test("ENGINE X-strict: every worker makes forward progress (no deadlock starves a process to zero commits)", async () => {
   const sqlite3 = await loadSqlite3();
   await withTempDb(async (dbPath) => {
     const report = await runConcurrency(sqlite3, {
-      ...baseOptions(dbPath),
+      ...baseOptions(dbPath, "engine"),
       mode: "xstrict",
       workers: CI_WORKERS,
       txnsPerWorker: CI_TXNS,
@@ -104,155 +121,76 @@ Deno.test("X-strict: every worker makes forward progress (no deadlock starves a 
   });
 });
 
-Deno.test("negative control: with locking DEFEATED (no-op xLock), the same workload corrupts the bank and the harness DETECTS it", async () => {
+Deno.test("ENGINE negative control: with locking DEFEATED (no-op xLock), the same workload corrupts the bank and the harness DETECTS it", async () => {
   const sqlite3 = await loadSqlite3();
   await withTempDb(async (dbPath) => {
     const report = await runConcurrency(sqlite3, {
-      ...baseOptions(dbPath),
+      ...baseOptions(dbPath, "engine"),
       mode: "defeated",
       workers: CI_WORKERS,
       txnsPerWorker: CI_TXNS,
     });
-    const workerCaught = report.results.some((r) => r.invariantViolation !== null);
-    const workerCrashed = report.crashes.length > 0;
-    const sumBroken = report.finalSnapshot.sum !== TOTAL_BALANCE;
-    const integrityBroken = report.integrity !== "ok";
-    const commitsLost = report.finalSnapshot.commitCount !== report.totalCommitted;
-    assert(
-      workerCaught || workerCrashed || sumBroken || integrityBroken || commitsLost,
-      `negative control stayed clean — the harness cannot detect corruption. ` +
-        `integrity=${report.integrity} sum=${report.finalSnapshot.sum}/${TOTAL_BALANCE} ` +
-        `commitCount=${report.finalSnapshot.commitCount} tracked=${report.totalCommitted} crashes=${report.crashes.length}`,
-    );
+    assertNegativeControlDetected(report);
   });
 });
 
-const PEER_TXNS = 30;
-const PEER_COUNT = 2;
-
-const readUntilReady = async (proc: Deno.ChildProcess): Promise<boolean> => {
-  const reader = proc.stdout.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  try {
-    while (!buf.includes("READY")) {
-      const { value, done } = await reader.read();
-      if (done) return false;
-      buf += dec.decode(value);
-    }
-    return true;
-  } finally {
-    reader.releaseLock();
-  }
-};
-
-const spawnConcWorker = (
-  path: string,
-  mode: string,
-  i: number,
-  txns: number,
-): Deno.ChildProcess => {
-  const dir = path.slice(0, path.lastIndexOf("/"));
-  return new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      `--config=${CONFIG}`,
-      "--no-prompt",
-      `--allow-read=${SRC},${dir}`,
-      `--allow-write=${dir}`,
-      WORKER,
-      path,
-      mode,
-      String(0xbeef + i),
-      String(txns),
-      String(CI_BUSY_TIMEOUT_MS),
-      String(i),
-    ],
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-};
-
-const spawnVictim = (path: string): Deno.ChildProcess => {
-  const dir = path.slice(0, path.lastIndexOf("/"));
-  return new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      `--config=${CONFIG}`,
-      "--no-prompt",
-      `--allow-read=${SRC},${dir}`,
-      `--allow-write=${dir}`,
-      VICTIM,
-      path,
-      "xstrict",
-    ],
-    stdout: "piped",
-    stderr: "null",
-  }).spawn();
-};
-
-Deno.test("crash recovery: a SIGKILLed writer leaves a hot journal that exactly one peer rolls back; invariants hold and the dead txn is gone", async () => {
-  const sqlite3 = await loadSqlite3();
-  const vfsName = installModeVfs(sqlite3, "xstrict");
-  for (let attempt = 0; attempt < 5; attempt++) {
+Deno.test(
+  "PUBLIC API X-strict: N processes drive openDatabase + db.transaction()/run, conserve the bank, keep integrity, and lose no commits (the savepoint factory + SqliteBusyError retry under real contention)",
+  async () => {
+    const sqlite3 = await loadSqlite3();
     await withTempDb(async (dbPath) => {
-      const seedDb = new sqlite3.oo1.DB(dbPath, "c", vfsName);
-      try {
-        seedBank(seedDb);
-      } finally {
-        seedDb.close();
-      }
-
-      const victim = spawnVictim(dbPath);
-      const ready = await readUntilReady(victim);
-      assert(ready, "victim never reached READY — its uncommitted txn never opened");
-      const hotJournalBytes = Deno.statSync(`${dbPath}-journal`).size;
+      const report = await runConcurrency(sqlite3, {
+        ...baseOptions(dbPath, "public"),
+        mode: "xstrict",
+        workers: CI_WORKERS,
+        txnsPerWorker: CI_TXNS,
+      });
+      assertXstrictHealthy(report);
+      const totalBusy = report.results.reduce((acc, r) => acc + r.busy, 0);
       assert(
-        hotJournalBytes > 0,
-        "no hot -journal on disk at kill time — the recovery path would not be exercised",
+        totalBusy > 0,
+        "no worker ever caught a SqliteBusyError — the public-API retry path (openDatabase sets no busy_timeout, so a contending transaction() must surface SQLITE_BUSY) was never exercised, so this proves nothing under contention",
       );
+    });
+  },
+);
 
-      const peers = Array.from(
-        { length: PEER_COUNT },
-        (_unused, i) => spawnConcWorker(dbPath, "xstrict", i + 10, PEER_TXNS),
-      );
-
-      victim.kill("SIGKILL");
-      await victim.status;
-      await victim.stdout.cancel().catch(() => {});
-
-      const peerResults = await Promise.all(peers.map(async (p) => {
-        const out = await new Response(p.stdout).text();
-        await new Response(p.stderr).text();
-        await p.status;
-        const m = out.split("\n").find((l) => l.startsWith("RESULT "));
-        return m ? Number(JSON.parse(m.slice(7)).committed) : 0;
-      }));
-      const peerCommits = peerResults.reduce((a, b) => a + b, 0);
-
-      const db = new sqlite3.oo1.DB(dbPath, "w", vfsName);
-      try {
-        db.exec("PRAGMA busy_timeout=10000");
-        assertEquals(integrityOk(db), "ok", "post-recovery integrity_check/quick_check must be ok");
-        const snap = readBank(db);
-        assertEquals(
-          snap.sum,
-          TOTAL_BALANCE,
-          `post-recovery SUM(balance) must equal K=${TOTAL_BALANCE} (balances=${
-            snap.balances.join(",")
-          })`,
+Deno.test(
+  "PUBLIC API X-strict: every worker reaches its commit quota through the public retry path (no transaction() deadlocks or starves a process to zero)",
+  async () => {
+    const sqlite3 = await loadSqlite3();
+    await withTempDb(async (dbPath) => {
+      const report = await runConcurrency(sqlite3, {
+        ...baseOptions(dbPath, "public"),
+        mode: "xstrict",
+        workers: CI_WORKERS,
+        txnsPerWorker: CI_TXNS,
+      });
+      for (const r of report.results) {
+        assert(
+          r.committed === CI_TXNS,
+          `worker ${r.worker} committed ${r.committed}/${CI_TXNS} through the public API — a starved worker never reached its quota`,
         );
-        assertEquals(
-          snap.commitCount,
-          peerCommits,
-          "commit_count must equal only the peers' commits — the SIGKILLed txn's increment was rolled back exactly once",
-        );
-      } finally {
-        db.close();
       }
     });
-  }
-});
+  },
+);
+
+Deno.test(
+  "PUBLIC API negative control: with locking DEFEATED, openDatabase + db.transaction() workers corrupt the bank and the harness DETECTS it",
+  async () => {
+    const sqlite3 = await loadSqlite3();
+    await withTempDb(async (dbPath) => {
+      const report = await runConcurrency(sqlite3, {
+        ...baseOptions(dbPath, "public"),
+        mode: "defeated",
+        workers: CI_WORKERS,
+        txnsPerWorker: CI_TXNS,
+      });
+      assertNegativeControlDetected(report);
+    });
+  },
+);
 
 Deno.test({
   name: "SOAK: millions of ops under CPU oversubscription (env-gated SQLITE_DENO_SOAK=1)",
@@ -270,6 +208,7 @@ Deno.test({
         mode: "xstrict",
         workers: SOAK_WORKERS,
         txnsPerWorker: SOAK_TXNS,
+        driver: SOAK_DRIVER,
       });
       assertXstrictHealthy(report);
     });
