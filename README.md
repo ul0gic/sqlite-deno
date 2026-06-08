@@ -6,25 +6,25 @@
 
 This is a **build-in-public** repository. The engine, a pure-TypeScript Deno-filesystem VFS over the
 SQLite team's official WebAssembly build, with two concurrency modes and crash recovery, is built
-and tested against a deterministic crash/concurrency harness. The public API is **not built yet**.
-Please read the status section before anything else, so you know exactly what works today.
+and tested against a deterministic crash/concurrency harness. As of Phase 7 the **public API has
+landed** — `openDatabase`, `Database`, typed `Statement<Row>`, transactions. It is **not yet
+published to JSR** (that is Phase 10), so you run it from a checkout, not an install. Please read
+the status section before anything else, so you know exactly what works today.
 
 ---
 
-## ⚠️ Status: engine working and tested, library not yet usable
+## Status: public API landed (Phase 7), not yet published
 
-**Phase 6 of 10 complete.** You **cannot** `import` and open a database from this package today -
-there is no `openDatabase`, no `Database`, no `Statement`. That is Phase 7.
+**Phase 7 of 10 complete.** You can now `import` from [`src/mod.ts`](./src/mod.ts) and drive a real,
+typed `openDatabase` / `Database` / `Statement<Row>` surface. What is **not** done is the
+reproducible byte-identical wasm build (Phase 9) and the JSR release (Phase 10) — so there is **no
+`jsr:` install to point at yet**. The usage below is the real API shape; it runs from a clone.
 
-Here is what is built so far. The foundation, the VFS, the locking, and the crash-recovery behavior
-
-- comes first, because everything above it depends on getting these right:
-
-|                                  |                                                                                                                                                                                                                                  |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Working and tested**           | The Deno-filesystem VFS (pure TypeScript, over `Deno.*Sync`). Both concurrency modes. Crash / power-loss recovery, on Linux (model-bounded, see [the caveats](#the-honest-capability-envelope-the-asterisks-each-with-the-why)). |
-| **Not built**                    | The public API (`openDatabase`, `Database`, `Statement`, transactions). The reproducible byte-identical wasm build. The JSR release.                                                                                             |
-| **Vendored, not yet self-built** | The wasm is the official `@sqlite.org/sqlite-wasm` `3.53.0-build1`, committed in-package (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). Building our own byte-for-byte from pinned source is Phase 9 and is **0% done**.            |
+|                                  |                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Working and tested**           | The public API (`openDatabase`, `Database`, typed `Statement<Row>`, transactions, typed errors). The Deno-filesystem VFS (pure TypeScript, over `Deno.*Sync`). Both concurrency modes. Crash / power-loss recovery, on Linux (model-bounded, see [the caveats](#the-honest-capability-envelope-the-asterisks-each-with-the-why)). |
+| **Not built**                    | The reproducible byte-identical wasm build (Phase 9). The JSR release (Phase 10) — not published yet, so no `jsr:` install.                                                                                                                                                                                                       |
+| **Vendored, not yet self-built** | The wasm is the official `@sqlite.org/sqlite-wasm` `3.53.0-build1`, committed in-package (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). Building our own byte-for-byte from pinned source is Phase 9 and is **0% done**.                                                                                                             |
 
 ```
 v0 - prove the path
@@ -35,27 +35,73 @@ v1 - public launch
   Phase 4  Crash-sim harness           ████████████████████  100%  done
   Phase 5  Mode 1 - rollback locks     ████████████████████  100%  done
   Phase 6  Mode 2 - WAL (exclusive)    ████████████████████  100%  done
-  Phase 7  Public API & bindings       ░░░░░░░░░░░░░░░░░░░░    0%  next
-  Phase 8  Full test suite (L1–L6)     ░░░░░░░░░░░░░░░░░░░░    0%
+  Phase 7  Public API & bindings       ████████████████████  100%  done
+  Phase 8  Full test suite (L1–L6)     ████████░░░░░░░░░░░░   40%  in progress
   Phase 9  Reproducible build & CI     ░░░░░░░░░░░░░░░░░░░░    0%
   Phase 10 JSR publish & docs          ░░░░░░░░░░░░░░░░░░░░    0%
 v2 - multi-process WAL                 ░░░░░░░░░░░░░░░░░░░░    0%  (gated on Deno core)
 ```
 
+### Quickstart
+
+Not on JSR yet, so import from the local source (a `jsr:@scope/sqlite-deno` specifier will arrive
+with Phase 10). The grant below is the entire permission footprint for durable writes — read **and**
+write on the directory holding the database, nothing else. (Why the directory and not just the file
+is the [durability caveat](#the-honest-durability-caveat-read-this).)
+
+```typescript
+// quickstart.ts
+import { openDatabase } from "./src/mod.ts";
+
+// `using` disposes the database at scope end: open statements are finalized,
+// the file handle is closed. Default mode is rollback, durable-by-default.
+using db = await openDatabase("./app.db");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+`);
+
+using insert = db.prepare("INSERT INTO users (name) VALUES (?)");
+insert.run("Ada");
+insert.run("Grace");
+
+interface User {
+  id: number;
+  name: string;
+}
+using byName = db.prepare<User>("SELECT id, name FROM users WHERE name = ?");
+const ada = byName.get("Ada"); // User | undefined — inferred, no cast
+console.log(ada); // { id: 1, name: "Ada" }
+
+// A transaction is a SAVEPOINT; a `using tx` that throws before commit rolls back.
+const tx = db.transaction();
+db.exec("UPDATE users SET name = 'Ada Lovelace' WHERE name = 'Ada'");
+tx.commit();
+```
+
+```bash
+# durable writes need the directory, not just the file (see the durability caveat)
+deno run --allow-read=. --allow-write=. quickstart.ts
+# { id: 1, name: "Ada" }
+```
+
+That is the whole grant: no `--allow-ffi`, no `--allow-net`, no `--allow-env`.
+
 ### How to read this repo right now
 
 ```bash
 git clone <this-repo> && cd sqlite-deno
-deno task check     # fmt, lint, type-check, and the full proof suite (69 tests)
+deno task check     # fmt, lint, type-check, and the full proof suite (162 tests)
 ```
 
-- The engine entry points live in [`src/vfs/`](./src/vfs/), `installDenoVfs` (in
-  [`src/vfs/deno.ts`](./src/vfs/deno.ts)) is what registers our VFS against the wasm.
-- The exported surface today ([`src/mod.ts`](./src/mod.ts)) is the engine, not a library:
-  `loadSqlite3`, `installDenoVfs`, `installMemoryVfs`. You drive SQLite through `sqlite3.oo1.DB`
-  after installing the VFS, that is a proving harness, not the intended ergonomic API.
-- The proofs are in [`test/`](./test/), the crash and concurrency harnesses under
-  [`test/harness/`](./test/harness/) are the most important code in the project.
+- The public API lives in [`src/mod.ts`](./src/mod.ts) — `openDatabase` and the `Database` /
+  `Statement<Row>` / `Transaction` types, plus the typed `SqliteError` hierarchy.
+- The engine entry points live in [`src/vfs/`](./src/vfs/); `installDenoVfs` (in
+  [`src/vfs/deno.ts`](./src/vfs/deno.ts)) is what registers our VFS against the wasm. `openDatabase`
+  installs it for you.
+- The proofs are in [`test/`](./test/); the crash and concurrency harnesses under
+  [`test/harness/`](./test/harness/) are the most important code in the project, and they now drive
+  the **shipped `openDatabase` surface**, not the engine alone.
 
 ---
 
@@ -116,12 +162,13 @@ the whole story for **durable writes**:
   deno run --allow-read=./data --allow-write=./data your_program.ts
   ```
 
-- Under a file-only grant the package still works and **fails closed**, it never widens your grant ,
+- Under a file-only grant the package still works and **fails closed**, it never widens your grant,
   but the directory-fsync is denied, so the last-commit durability guarantee is unavailable. We
   surface this as an error, never as a silent downgrade.
 
-This caveat is tracked as a Phase-7 documentation obligation; the engine behavior is already correct
-(fail-closed, never grant-widening).
+The engine behavior is fail-closed and never grant-widening. The full durability model — what each
+commit mode guarantees, and the one knob that trades a sync for speed — is in
+[Durability](#durability) below.
 
 ---
 
@@ -129,7 +176,7 @@ This caveat is tracked as a Phase-7 documentation obligation; the engine behavio
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Your code  →  (Phase 7) public API: openDatabase, ...       │  ← not built yet
+│  Your code  →  public API: openDatabase, Database, Statement │  ← built (Phase 7)
 ├──────────────────────────────────────────────────────────────┤
 │  JS↔WASM glue (src/glue.ts): marshals values, owns memory    │
 ├──────────────────────────────────────────────────────────────┤
@@ -256,10 +303,15 @@ The correctness claims here are meant to be **executable rather than taken on fa
 them and check. The whole suite runs from a clean checkout:
 
 ```bash
-deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 69 tests
+deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 162 tests
 deno task test:soak    # Mode 1: N real OS processes, Jepsen bank, CPU-oversubscribed (env-gated)
 deno task test:soak:wal # Mode 2: multi-seed WAL crash sweep (env-gated)
 ```
+
+The L3 crash, L4 concurrency, and WAL crash-sweep harnesses now drive the **shipped `openDatabase`
+surface** — belt-and-suspenders: the engine-floor proofs are retained, and the same harnesses are
+re-pointed at the public `Database` / `Statement` / `Transaction` path so a regression in the
+bindings is caught by the same crash and concurrency invariants, all negative-control-gated.
 
 What the suite proves:
 
@@ -280,7 +332,8 @@ What the suite proves:
   from `{db, -wal}` with the `-shm` deleted (the heap wal-index is rebuilt from frame headers -
   there is no `-shm`). Two negative controls caught.
 
-These run on the **vendored** wasm and the **real** Deno-FS VFS, never a stubbed SQLite.
+These run on the **vendored** wasm, the **real** Deno-FS VFS, and the **shipped public API** — never
+a stubbed SQLite.
 
 ---
 
@@ -304,8 +357,13 @@ without byte-range locks. So v1 ships SQLite's own `unix-flock` protocol verbati
 every level), which is **provably correct by construction**, at the cost of serialization. True
 "many readers XOR one writer" needs byte-range `fcntl` and is **v2**.
 
-> A contending connection must set a `busy_timeout` so it retries `SQLITE_BUSY` rather than failing
-> immediately. All lock calls are non-blocking, so there is no OS deadlock.
+> **The multi-process Mode-1 contract:** a contending caller gets a `SqliteBusyError` (the lock is
+> held), and the retry is the caller's — wrap the contended `db.transaction()` (and the
+> `openDatabase` itself, whose mode pragmas also take the lock) in a retry loop on
+> `SqliteBusyError`. All lock calls are non-blocking, so there is no OS deadlock. A `busyTimeout`
+> open option that would let SQLite block-and-retry for you — so callers don't hand-roll this — is a
+> tracked enhancement ([ENH-005](./.project/issues/open/)); it is **not implemented yet**, so today
+> the retry loop is yours.
 
 ### Mode 2, WAL: **single-process exclusive only**
 
@@ -323,14 +381,30 @@ long-running server process owning its database. Multi-process WAL is **v2**.
 
 ### Durability
 
+**Commit durability is separate from integrity.** Every mode and every durability level stays
+**corruption-free** across the modeled power loss — `PRAGMA integrity_check` is always `ok`. The
+only thing that varies is whether the _latest committed_ transaction survives a power cut. That one
+axis is the `durability` option, and the two modes default it differently:
+
+| Mode (option)        | Default `durability` | What the default means                                                                                |
+| -------------------- | -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `rollback` (default) | **`"full"`**         | Durable-by-default: the last committed txn survives modeled power loss. `synchronous=FULL`.           |
+| `wal`                | **`"normal"`**       | SQLite-recommended WAL default: consistency-safe, but the last commit(s) may roll back on power loss. |
+
+- **Rollback defaults `durability: "full"`** (`synchronous=FULL`) — durable-by-default, the last
+  committed transaction survives the modeled power loss. Pass `{ durability: "normal" }` for the
+  faster opt-in (one fewer journal sync per commit); it stays consistency-safe, but the latest
+  commit can be lost on a power cut. This was a real footgun the harness caught — see
+  [the engineering story below](#bug-004-re-pointing-the-harness-at-the-public-api-found-a-default-that-silently-dropped-the-last-commit).
+- **WAL defaults `durability: "normal"`** (`synchronous=NORMAL`), the SQLite-recommended WAL
+  default: consistency-safe, but a transaction that returned `COMMIT` can roll back after a power
+  cut (it survives an _application_ crash, just not a _power_ loss). This is documented SQLite
+  behavior, not a corruption bug — `integrity_check` stays `ok`. Pass
+  `{ mode: "wal", durability: "full" }` for power-loss durability in WAL.
 - **Directory-fsync is shipped and Linux-proven** (it makes journal creation/deletion survive a
   power cut). It needs the **parent-directory** grant, see
-  [the permission caveat](#the-honest-durability-caveat--read-this) above.
-- **WAL at `synchronous=NORMAL` is consistency-safe but NOT power-loss-durable for the last
-  commit(s).** A transaction that returned `COMMIT` at `NORMAL` can roll back after a power cut (it
-  survives an _application_ crash, just not a _power_ loss). This is documented SQLite behavior, not
-  a corruption bug, `integrity_check` stays `ok`. Use `synchronous=FULL` for power-loss durability
-  in WAL.
+  [the permission caveat](#the-honest-durability-caveat-read-this) above; under a file-only grant
+  the package fails closed rather than silently dropping the sync.
 - **Windows** directory-fsync durability is **unverified** (do not rely on it). **NFS / networked
   filesystems are unsupported**, same as native SQLite.
 - The crash proofs are model-bounded (a worst-legal-device power-loss model + Linux
@@ -385,6 +459,19 @@ the committed pages back. The first diagnosed root cause, _"Deno cannot fsync a 
 directory fsync in the VFS where SQLite expects it. Both are harness-proven on Linux. The lesson:
 verify the root cause against the artifact before designing around it.
 
+### BUG-004, re-pointing the harness at the public API found a default that silently dropped the last commit
+
+The moment the L3 crash harness was re-pointed off the engine floor and onto the shipped
+`openDatabase` path, it caught another **silent** committed-data loss. The engine-floor harness had
+run SQLite's own `synchronous=FULL` default and stayed green; the public API had shipped the
+rollback default at `synchronous=NORMAL`, and at `NORMAL` a torn next-transaction journal can be
+resurrected over a prior commit after a power cut — `integrity_check` still `ok`, the last commit
+silently gone. The same workload at `FULL` survived with zero losses. The fix: default the rollback
+envelope to `synchronous=FULL` (durable-by-default), with `{ durability: "normal" }` kept as an
+explicit, documented opt-in. Like BUG-001, the harness earned its keep precisely _because_ a new
+code path exercised a window the old one never did — the regression guard now sweeps both levels
+explicitly.
+
 ### The X-strict pivot, we _retreated_ from an unproven concurrent-reader design
 
 The first Mode-1 draft was the clever "many readers XOR one writer" design. Verifying it against the
@@ -414,11 +501,13 @@ is a reasonable choice, and for many projects the right one.
 | Bulk-write throughput           | slower (WASM), **we lose here**                | **fastest**                        | fast (native)                                   | slower (WASM)                      | slower (WASM)                         |
 | Reproducible build / provenance | **planned** (Phase 9–10, OIDC), vendored today | binary from a release              | ships with Deno                                 | own build                          | npm-published                         |
 | Deno-filesystem VFS             | **yes** (pure TS)                              | n/a (native)                       | n/a (native)                                    | yes                                | no (OPFS-oriented)                    |
-| **Usable as a library today**   | **NO, engine only, API is Phase 7**            | yes                                | yes                                             | yes                                | yes (browser)                         |
+| Public API                      | **yes** (`openDatabase`, typed `Statement`)    | yes                                | yes (`node:sqlite`)                             | yes                                | yes (browser `oo1`)                   |
+| Published / installable         | **not yet** (Phase 10 JSR; runs from a clone)  | yes (JSR)                          | yes (built into Deno)                           | yes (deno.land/x)                  | yes (npm)                             |
 
 Take-away: if you need maximum bulk-write speed and `--allow-ffi` is acceptable, `@db/sqlite` is an
 excellent choice. If what you need is an embedded SQLite that **keeps Deno's permission model intact
-and runs on the edge**, that is the gap this project is aiming at, once Phase 7 lands.
+and runs on the edge**, that is the gap this project fills — the API is here today; the JSR release
+is Phase 10.
 
 ---
 
@@ -426,14 +515,17 @@ and runs on the edge**, that is the gap this project is aiming at, once Phase 7 
 
 **v1 (public launch):**
 
-- **Phase 7, Public API.** `openDatabase`, `Database`, typed `Statement<Row>`, transactions,
+- **Phase 7, Public API — done.** `openDatabase`, `Database`, typed `Statement<Row>`, transactions,
   `using`/`Symbol.dispose` lifetimes, Web-Streams result streaming. Mode selection is explicit and
-  constrained at open (illegal combos unrepresentable), so a caller cannot accidentally leave the
-  tested engine envelope. No user-defined SQL functions in v1 (that JS-callback-reentrancy surface
-  is one place native engines have historically hit use-after-free; it waits until the reentrancy
-  model is tested).
+  constrained at open (illegal combos unrepresentable — `{ readonly: true, mode: "wal" }` is
+  rejected), so a caller cannot accidentally leave the tested engine envelope. No user-defined SQL
+  functions in v1 (that JS-callback-reentrancy surface is one place native engines have historically
+  hit use-after-free; it waits until the reentrancy model is tested). A `busyTimeout` open
+  affordance, so multi-process Mode-1 callers need not hand-roll `SqliteBusyError` retry, is tracked
+  ([ENH-005](./.project/issues/open/)) but not yet built.
 - **Phase 8, Full L1–L6 test suite** (functional, permission, crash/durability, concurrency,
-  borrowed SQLite/fuzz corpora, build).
+  borrowed SQLite/fuzz corpora, build) — **in progress**. The L3/L4/WAL harnesses already drive the
+  shipped `openDatabase` surface.
 - **Phase 9, Reproducible byte-identical wasm build.** Today the wasm is the **vendored** official
   artifact; compiling our own byte-for-byte from pinned SQLite source + pinned toolchain, with a
   `verify-build.sh` a stranger can run, is **not done**.
