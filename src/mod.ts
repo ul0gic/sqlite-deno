@@ -1,7 +1,19 @@
 /** Package version; release tooling keeps this in lockstep with `deno.json`. */
 export const VERSION = "0.0.0";
 
-export { loadSqlite3 } from "./glue.ts";
-export type { Sqlite3, Sqlite3Static } from "./glue.ts";
-export { installMemoryVfs, MEMORY_VFS_NAME } from "./vfs/memory.ts";
-export { DENO_VFS_NAME, installDenoVfs } from "./vfs/deno.ts";
+export { openDatabase } from "./database.ts";
+export type { Database, OpenMode, OpenOptions } from "./database.ts";
+export type { RunResult, Statement } from "./statement.ts";
+export type { Transaction } from "./transaction.ts";
+export type { SqlValue } from "./marshal.ts";
+
+export {
+  SqliteBusyError,
+  SqliteCantOpenError,
+  SqliteConstraintError,
+  SqliteCorruptError,
+  SqliteError,
+  SqliteMisuseError,
+  SqliteRangeError,
+  SqliteReadonlyError,
+} from "./errors.ts";
