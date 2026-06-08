@@ -62,12 +62,12 @@ const allIssued = (recorded: RecordedWorkload): ReadonlySet<number> => {
   return issued;
 };
 
-export const runDentryScenario = (
+export const runDentryScenario = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   dir: string,
   cfg: ScenarioConfig,
-): ScenarioSummary => {
+): Promise<ScenarioSummary> => {
   const recorded = runWorkload(sqlite3, recorder, cfg.spec);
   const issued = allIssued(recorded);
   const indices = cfg.indices(recorded);
@@ -81,7 +81,7 @@ export const runDentryScenario = (
         const subSeed = (seed * 1_000_003 + k * 131) >>> 0;
         const rng = createRng(subSeed);
         const image = reconstruct(recorded.ops, k, variant, rng, { dentryDurable: false });
-        const result = verifyReconstruction(
+        const result = await verifyReconstruction(
           sqlite3,
           dir,
           recorded.dbName,

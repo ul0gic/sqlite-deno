@@ -78,14 +78,14 @@ export interface AbResult {
  * did and the committed txn still survives, the survival is meaningful (the
  * dangerous case was exercised), not a vacuous pass.
  */
-export const runFinalizationAb = (
+export const runFinalizationAb = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   dir: string,
   spec: WorkloadSpec,
   mode: JournalMode,
   seed: number,
-): AbResult => {
+): Promise<AbResult> => {
   const recorded = runWorkload(sqlite3, recorder, { ...spec, journalMode: mode });
   const issued = issuedValues(recorded);
   const points: AbPoint[] = [];
@@ -98,7 +98,7 @@ export const runFinalizationAb = (
     const imgDurable = reconstruct(recorded.ops, k, "apply-all-unsynced", createRng(subSeed), {
       dentryDurable: true,
     });
-    const durable = verifyReconstruction(
+    const durable = await verifyReconstruction(
       sqlite3,
       dir,
       recorded.dbName,
@@ -112,7 +112,7 @@ export const runFinalizationAb = (
     });
     const journalImg = [...imgDropped.entries()].find(([f]) => isJournal(f))?.[1];
     const zombie = journalImg?.exists === true && journalHasValidMagic(journalImg.bytes);
-    const dropped = verifyReconstruction(
+    const dropped = await verifyReconstruction(
       sqlite3,
       dir,
       recorded.dbName,

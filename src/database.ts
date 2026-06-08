@@ -21,17 +21,27 @@ const SQLITE_MISUSE = 21;
  * pragma envelope its proof rests on; the union shape makes the unproven
  * combinations — notably multi-process + WAL — unrepresentable.
  *
- * - `rollback` (default): rollback journal over the X-strict whole-file lock
- *   ladder (DEC-009). Multi-process **serialized** — one accessor at a time.
- *   Power-loss-durable via `journal_mode=PERSIST` (DEC-008) at `synchronous`
- *   NORMAL or FULL.
+ * `durability` controls **commit durability**, which is separate from integrity.
+ * Either level keeps the database **corruption-free** across modeled power loss
+ * (`PRAGMA integrity_check` stays `ok`); they differ only in whether the *latest*
+ * committed transaction survives a crash:
+ * - `"full"`: a committed transaction survives modeled power loss.
+ * - `"normal"`: consistency-safe, but the **latest committed transaction may be
+ *   lost** on power loss. Faster — one fewer fsync per commit.
+ *
+ * - `rollback` (default): rollback journal (`journal_mode=PERSIST`) over the
+ *   X-strict whole-file lock ladder (DEC-009). Multi-process **serialized** — one
+ *   accessor at a time. Defaults to `durability: "full"` (durable-by-default):
+ *   `"normal"` here can drop the last commit when a torn next-transaction journal
+ *   is resurrected on reopen, and `"full"` adds the journal-header sync that
+ *   closes that window (DEC-008, BUG-004).
  * - `wal`: write-ahead log under `locking_mode=EXCLUSIVE`, so the wal-index lives
- *   in heap with no `-shm` (DEC-010). **Single process.** `synchronous=NORMAL`
- *   is consistency-safe but loses the last commits on power loss; pass
- *   `durability: "full"` for power-loss durability (ENH-003).
+ *   in heap with no `-shm` (DEC-010). **Single process.** Defaults to
+ *   `durability: "normal"` — the SQLite-recommended WAL default; pass
+ *   `durability: "full"` to also make the last commit power-loss-durable (ENH-003).
  */
 export type OpenMode =
-  | { readonly mode?: "rollback" }
+  | { readonly mode?: "rollback"; readonly durability?: "normal" | "full" }
   | { readonly mode: "wal"; readonly durability?: "normal" | "full" };
 
 export type OpenOptions = OpenMode & {
@@ -117,9 +127,9 @@ const enterWal = (raw: RawDb, durability: "normal" | "full"): void => {
   execRaw(raw, pragmaSync(durability));
 };
 
-const enterRollback = (raw: RawDb): void => {
+const enterRollback = (raw: RawDb, durability: "normal" | "full"): void => {
   execRaw(raw, "PRAGMA journal_mode=PERSIST");
-  execRaw(raw, "PRAGMA synchronous=NORMAL");
+  execRaw(raw, pragmaSync(durability));
 };
 
 const configure = (raw: RawDb, opts: OpenOptions): void => {
@@ -128,10 +138,15 @@ const configure = (raw: RawDb, opts: OpenOptions): void => {
     enterWal(raw, opts.durability ?? "normal");
     return;
   }
-  enterRollback(raw);
+  enterRollback(raw, opts.durability ?? "full");
 };
 
-const openHandle = (sqlite3: Sqlite3, path: string, opts: OpenOptions): DbPtr => {
+const openHandle = (
+  sqlite3: Sqlite3,
+  path: string,
+  vfsName: string,
+  opts: OpenOptions,
+): DbPtr => {
   const { capi, wasm } = sqlite3;
   const flags = opts.readonly === true
     ? SQLITE_OPEN_READONLY | SQLITE_OPEN_EXRESCODE
@@ -139,7 +154,7 @@ const openHandle = (sqlite3: Sqlite3, path: string, opts: OpenOptions): DbPtr =>
   const stack = wasm.pstack.pointer;
   try {
     const ppDb = wasm.pstack.alloc(4);
-    const rc = capi.sqlite3_open_v2(path, ppDb, flags, DENO_VFS_NAME);
+    const rc = capi.sqlite3_open_v2(path, ppDb, flags, vfsName);
     // The out-pointer holds an `sqlite3*`; reinterpret the ABI i32 into the
     // branded handle once. SQLite allocates the handle even on failure so it can
     // carry a diagnostic, so the close must run on the error path too.
@@ -179,6 +194,49 @@ const createDatabase = (sqlite3: Sqlite3, handle: DbPtr): Database => {
   return db;
 };
 
+const rejectReadonlyWal = (opts: OpenOptions): void => {
+  if (opts.readonly === true && opts.mode === "wal") {
+    // A read-only connection cannot run `journal_mode=WAL`, so honoring the
+    // explicit WAL request is impossible; reject rather than silently drop it.
+    throw new SqliteMisuseError(
+      "readonly and mode 'wal' are incompatible: a read-only connection cannot establish WAL",
+      SQLITE_MISUSE,
+      SQLITE_MISUSE,
+    );
+  }
+};
+
+/**
+ * The shared open envelope, parameterized only by which VFS the handle binds to.
+ * It runs the full proven configuration (`OpenMode` → rollback/WAL pragma
+ * sequence, the readonly+wal guard) against an already-loaded engine whose
+ * `vfsName` is already registered — never installing or selecting a VFS itself.
+ *
+ * Not exported from `mod.ts`: this is the internal seam the crash/concurrency
+ * harnesses import to point the proven envelope at the deterministic crash-sim
+ * VFS, so the L3/L4 proofs exercise the shipped `Database`/`Statement`/
+ * `Transaction` surface rather than the engine alone. Exposing VFS selection on
+ * the public API would let a caller escape the proven-mode envelope (security
+ * review, DBT-005); production `openDatabase` therefore hard-binds the
+ * Deno-filesystem VFS and never threads a name through.
+ */
+export const openDatabaseWithVfs = (
+  sqlite3: Sqlite3,
+  path: string,
+  vfsName: string,
+  opts: OpenOptions = {},
+): Database => {
+  rejectReadonlyWal(opts);
+  const handle = openHandle(sqlite3, path, vfsName, opts);
+  try {
+    configure({ sqlite3, handle }, opts);
+  } catch (e) {
+    sqlite3.capi.sqlite3_close_v2(handle);
+    throw e;
+  }
+  return createDatabase(sqlite3, handle);
+};
+
 /**
  * Opens the database file at `path` over the Deno-filesystem VFS and configures
  * the proven commit mode (`rollback` by default, `wal` opt-in). The only
@@ -190,23 +248,8 @@ export const openDatabase = async (
   path: string,
   opts: OpenOptions = {},
 ): Promise<Database> => {
-  if (opts.readonly === true && opts.mode === "wal") {
-    // A read-only connection cannot run `journal_mode=WAL`, so honoring the
-    // explicit WAL request is impossible; reject rather than silently drop it.
-    throw new SqliteMisuseError(
-      "readonly and mode 'wal' are incompatible: a read-only connection cannot establish WAL",
-      SQLITE_MISUSE,
-      SQLITE_MISUSE,
-    );
-  }
+  rejectReadonlyWal(opts);
   const sqlite3 = await loadSqlite3();
   installDenoVfs(sqlite3);
-  const handle = openHandle(sqlite3, path, opts);
-  try {
-    configure({ sqlite3, handle }, opts);
-  } catch (e) {
-    sqlite3.capi.sqlite3_close_v2(handle);
-    throw e;
-  }
-  return createDatabase(sqlite3, handle);
+  return openDatabaseWithVfs(sqlite3, path, DENO_VFS_NAME, opts);
 };

@@ -43,7 +43,7 @@ const fmtFailures = (
 Deno.test(
   "BUG-001 FIX: DELETE + synchronous=EXTRA + dir-sync survives the full crash sweep with ZERO implicit directory durability",
   async () => {
-    await withVfs("bug001fix-delete-extra", true, true, (sqlite3, recorder, dir) => {
+    await withVfs("bug001fix-delete-extra", true, true, async (sqlite3, recorder, dir) => {
       for (const seed of SEEDS) {
         const spec: WorkloadSpec = {
           txns: 5,
@@ -52,7 +52,7 @@ Deno.test(
           journalMode: "DELETE",
           synchronous: "EXTRA",
         };
-        const res = runSweep(sqlite3, recorder, dir, {
+        const res = await runSweep(sqlite3, recorder, dir, {
           spec,
           seed,
           reconstructionsPerPoint: 8,
@@ -77,10 +77,10 @@ Deno.test(
 Deno.test(
   "BUG-001 control: DELETE + EXTRA WITHOUT the dir-sync VFS still loses a committed txn (the fix, not the mode, is what closes T-B)",
   async () => {
-    await withVfs("bug001fix-delete-nodirsync", true, false, (sqlite3, recorder, dir) => {
+    await withVfs("bug001fix-delete-nodirsync", true, false, async (sqlite3, recorder, dir) => {
       let committedLoss = 0;
       for (const seed of SEEDS) {
-        const res = runSweep(sqlite3, recorder, dir, {
+        const res = await runSweep(sqlite3, recorder, dir, {
           spec: {
             txns: 4,
             rowsPerTxn: 2,
@@ -105,8 +105,8 @@ Deno.test(
 Deno.test(
   "BUG-001 FIX negative control: a lying no-op xSync (and lying dir-sync) under DELETE+EXTRA+dir-sync is CAUGHT",
   async () => {
-    await withVfs("bug001fix-noop", false, true, (sqlite3, recorder, dir) => {
-      const res = runSweep(sqlite3, recorder, dir, {
+    await withVfs("bug001fix-noop", false, true, async (sqlite3, recorder, dir) => {
+      const res = await runSweep(sqlite3, recorder, dir, {
         spec: {
           txns: 4,
           rowsPerTxn: 2,
@@ -140,12 +140,12 @@ interface UnlinkAb {
   readonly droppedDirSyncPresent: readonly number[];
 }
 
-const runUnlinkAb = (
+const runUnlinkAb = async (
   sqlite3: Awaited<ReturnType<typeof loadSqlite3>>,
   recorder: ReturnType<typeof installCrashVfs>,
   dir: string,
   seed: number,
-): readonly UnlinkAb[] => {
+): Promise<readonly UnlinkAb[]> => {
   const recorded = runWorkload(sqlite3, recorder, {
     txns: 4,
     rowsPerTxn: 2,
@@ -169,7 +169,7 @@ const runUnlinkAb = (
     const imgWith = reconstruct(recorded.ops, kDirSync, "drop-all-unsynced", createRng(subSeed), {
       dentryDurable: false,
     });
-    const withRes = verifyReconstruction(
+    const withRes = await verifyReconstruction(
       sqlite3,
       dir,
       recorded.dbName,
@@ -188,7 +188,7 @@ const runUnlinkAb = (
     );
     const journalImg = [...imgDropped.entries()].find(([f]) => isJournal(f))?.[1];
     const zombie = journalImg?.exists === true && journalHasValidMagic(journalImg.bytes);
-    const droppedRes = verifyReconstruction(
+    const droppedRes = await verifyReconstruction(
       sqlite3,
       dir,
       recorded.dbName,
@@ -213,11 +213,11 @@ const runUnlinkAb = (
 Deno.test(
   "BUG-001 FIX A/B at the journal unlink: dir-sync issued -> committed survives; dir-sync dropped -> zombie resurrects and commit is lost",
   async () => {
-    await withVfs("bug001fix-ab", true, true, (sqlite3, recorder, dir) => {
+    await withVfs("bug001fix-ab", true, true, async (sqlite3, recorder, dir) => {
       let exercisedDangerous = 0;
       let provedFixMatters = 0;
       for (const seed of SEEDS) {
-        const points = runUnlinkAb(sqlite3, recorder, dir, seed);
+        const points = await runUnlinkAb(sqlite3, recorder, dir, seed);
         assert(points.length > 0, `seed ${seed}: no journal-unlink A/B points with a commit`);
         for (const p of points) {
           assert(

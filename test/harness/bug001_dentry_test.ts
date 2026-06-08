@@ -29,8 +29,8 @@ const withScenarioVfs = async <T>(
 };
 
 Deno.test("BUG-001 T-A: a lost journal creation never corrupts the database (I1 holds)", async () => {
-  await withScenarioVfs("crash-bug001-ta", (sqlite3, recorder, dir) => {
-    const summary = runDentryScenario(sqlite3, recorder, dir, {
+  await withScenarioVfs("crash-bug001-ta", async (sqlite3, recorder, dir) => {
+    const summary = await runDentryScenario(sqlite3, recorder, dir, {
       spec: SPEC,
       seeds: SEEDS,
       indices: journalCreateMidUpdateIndices,
@@ -47,8 +47,8 @@ Deno.test("BUG-001 T-A: a lost journal creation never corrupts the database (I1 
 });
 
 Deno.test("BUG-001 T-B: a lost journal deletion (zombie hot journal) ROLLS BACK a committed txn", async () => {
-  await withScenarioVfs("crash-bug001-tb", (sqlite3, recorder, dir) => {
-    const summary = runDentryScenario(sqlite3, recorder, dir, {
+  await withScenarioVfs("crash-bug001-tb", async (sqlite3, recorder, dir) => {
+    const summary = await runDentryScenario(sqlite3, recorder, dir, {
       spec: SPEC,
       seeds: SEEDS,
       indices: journalDeleteIndices,
@@ -71,8 +71,8 @@ Deno.test("BUG-001 T-B: a lost journal deletion (zombie hot journal) ROLLS BACK 
 });
 
 Deno.test("BUG-001 T-B: every zombie-journal reconstruction is structurally valid (I1 holds even when a commit is lost)", async () => {
-  await withScenarioVfs("crash-bug001-tb-i1", (sqlite3, recorder, dir) => {
-    const summary = runDentryScenario(sqlite3, recorder, dir, {
+  await withScenarioVfs("crash-bug001-tb-i1", async (sqlite3, recorder, dir) => {
+    const summary = await runDentryScenario(sqlite3, recorder, dir, {
       spec: SPEC,
       seeds: SEEDS,
       indices: journalDeleteIndices,

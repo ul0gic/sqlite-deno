@@ -6,17 +6,23 @@ import { reconstruct, RECONSTRUCTIONS } from "./reconstruct.ts";
 import { createRng } from "./rng.ts";
 import {
   committedValuesAt,
+  ENGINE_DRIVER,
   type RecordedWorkload,
   runWorkload,
+  type WorkloadDriver,
   type WorkloadSpec,
 } from "./workload.ts";
-import { verifyReconstruction } from "./verify.ts";
+import { ENGINE_READBACK, type ReadbackDriver, verifyReconstruction } from "./verify.ts";
 
 export interface SweepConfig {
   readonly spec: WorkloadSpec;
   readonly seed: number;
   readonly reconstructionsPerPoint: number;
   readonly dentryDurable: boolean;
+  /** How the workload is driven — engine floor (default) or the public surface. */
+  readonly workloadDriver?: WorkloadDriver;
+  /** How the post-crash image is reopened — engine floor (default) or the public surface. */
+  readbackDriver?: ReadbackDriver;
 }
 
 export interface SweepFailure {
@@ -40,13 +46,15 @@ const allIssuedValues = (recorded: RecordedWorkload): ReadonlySet<number> => {
   return issued;
 };
 
-export const runSweep = (
+export const runSweep = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,
   dir: string,
   cfg: SweepConfig,
-): SweepResult => {
-  const recorded = runWorkload(sqlite3, recorder, cfg.spec);
+): Promise<SweepResult> => {
+  const workloadDriver = cfg.workloadDriver ?? ENGINE_DRIVER;
+  const readbackDriver = cfg.readbackDriver ?? ENGINE_READBACK;
+  const recorded = runWorkload(sqlite3, recorder, cfg.spec, workloadDriver);
   const issued = allIssuedValues(recorded);
   const failures: SweepFailure[] = [];
   let reconstructions = 0;
@@ -65,13 +73,14 @@ export const runSweep = (
       const image = reconstruct(recorded.ops, k, variant, rng, {
         dentryDurable: cfg.dentryDurable,
       });
-      const result = verifyReconstruction(
+      const result = await verifyReconstruction(
         sqlite3,
         dir,
         recorded.dbName,
         image,
         committed,
         issued,
+        readbackDriver,
       );
       reconstructions++;
       if (!result.ok) {

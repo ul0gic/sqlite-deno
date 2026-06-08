@@ -406,9 +406,23 @@ Deno.test("durability normal and full set synchronous to 1 and 2 respectively", 
   });
 });
 
-Deno.test("the default rollback mode sets journal_mode persist and synchronous normal", async () => {
+Deno.test("the default rollback mode sets journal_mode persist and synchronous FULL (durable-by-default, BUG-004)", async () => {
   await withDir(async (dir) => {
     using db = await openDatabase(`${dir}/rollback-env.db`);
+    assertEquals(
+      db.prepare<{ journal_mode: string }>("PRAGMA journal_mode").get()?.journal_mode,
+      "persist",
+    );
+    assertEquals(
+      db.prepare<{ synchronous: number }>("PRAGMA synchronous").get()?.synchronous,
+      2,
+    );
+  });
+});
+
+Deno.test("rollback mode with durability normal sets synchronous NORMAL (the explicit weaker opt-in)", async () => {
+  await withDir(async (dir) => {
+    using db = await openDatabase(`${dir}/rollback-normal.db`, { durability: "normal" });
     assertEquals(
       db.prepare<{ journal_mode: string }>("PRAGMA journal_mode").get()?.journal_mode,
       "persist",

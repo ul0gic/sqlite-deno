@@ -38,7 +38,7 @@ const sweepZeroDirDurability = (mode: JournalMode): void => {
   Deno.test(
     `journal_mode=${mode}: survives the full crash sweep with ZERO directory durability`,
     async () => {
-      await withVfs(`jmode-sweep-${mode}`, true, (sqlite3, recorder, dir) => {
+      await withVfs(`jmode-sweep-${mode}`, true, async (sqlite3, recorder, dir) => {
         for (const seed of SEEDS) {
           const spec: WorkloadSpec = {
             txns: 5,
@@ -46,7 +46,7 @@ const sweepZeroDirDurability = (mode: JournalMode): void => {
             dbName: `/${mode.toLowerCase()}.db`,
             journalMode: mode,
           };
-          const res = runSweep(sqlite3, recorder, dir, {
+          const res = await runSweep(sqlite3, recorder, dir, {
             spec,
             seed,
             reconstructionsPerPoint: 8,
@@ -76,7 +76,7 @@ const finalizationAb = (mode: JournalMode): void => {
   Deno.test(
     `journal_mode=${mode}: committed txn survives a DROPPED invalidation (A/B, zombie journal present)`,
     async () => {
-      await withVfs(`jmode-ab-${mode}`, true, (sqlite3, recorder, dir) => {
+      await withVfs(`jmode-ab-${mode}`, true, async (sqlite3, recorder, dir) => {
         const spec: WorkloadSpec = {
           txns: 4,
           rowsPerTxn: 2,
@@ -84,7 +84,7 @@ const finalizationAb = (mode: JournalMode): void => {
         };
         let exercisedDangerous = 0;
         for (const seed of SEEDS) {
-          const res = runFinalizationAb(sqlite3, recorder, dir, spec, mode, seed);
+          const res = await runFinalizationAb(sqlite3, recorder, dir, spec, mode, seed);
           assert(
             res.points.length > 0,
             `${mode} seed ${seed}: no finalization points with a commit`,
@@ -117,8 +117,8 @@ const negativeControl = (mode: JournalMode): void => {
   Deno.test(
     `negative control journal_mode=${mode}: a lying no-op xSync is CAUGHT`,
     async () => {
-      await withVfs(`jmode-noop-${mode}`, false, (sqlite3, recorder, dir) => {
-        const res = runSweep(sqlite3, recorder, dir, {
+      await withVfs(`jmode-noop-${mode}`, false, async (sqlite3, recorder, dir) => {
+        const res = await runSweep(sqlite3, recorder, dir, {
           spec: {
             txns: 4,
             rowsPerTxn: 2,
@@ -148,10 +148,10 @@ negativeControl("TRUNCATE");
 Deno.test(
   "baseline journal_mode=DELETE: the full sweep with ZERO directory durability STILL loses a committed txn (BUG-001 holds)",
   async () => {
-    await withVfs("jmode-delete-baseline", true, (sqlite3, recorder, dir) => {
+    await withVfs("jmode-delete-baseline", true, async (sqlite3, recorder, dir) => {
       let committedLoss = 0;
       for (const seed of SEEDS) {
-        const res = runSweep(sqlite3, recorder, dir, {
+        const res = await runSweep(sqlite3, recorder, dir, {
           spec: { txns: 4, rowsPerTxn: 2, dbName: "/delete.db", journalMode: "DELETE" },
           seed,
           reconstructionsPerPoint: 8,

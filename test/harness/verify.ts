@@ -1,5 +1,7 @@
 import type { Sqlite3 } from "../../src/glue.ts";
+import { openDatabase } from "../../src/database.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "../../src/vfs/deno.ts";
+import type { SqlValue } from "../../src/marshal.ts";
 import type { FileImage } from "./oplog.ts";
 
 export interface VerifyResult {
@@ -7,6 +9,18 @@ export interface VerifyResult {
   readonly detail: string;
   readonly present: ReadonlySet<number>;
 }
+
+/**
+ * Reads back the reconstructed image: asserts `integrity_check=ok` (I1) and
+ * returns the set of present `kv.v` values (I2 is checked by the caller). A
+ * driver owns *how* the reopen happens — directly via `oo1.DB` (engine floor)
+ * or through the literal production `openDatabase` (the shipped reopen path,
+ * which runs recovery + the rollback pragma envelope exactly as a real reopen).
+ */
+export type ReadbackDriver = {
+  readonly label: string;
+  readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;
+};
 
 const localName = (dir: string, file: string): string => `${dir}/${file.replace(/^.*\//, "")}`;
 
@@ -30,7 +44,7 @@ const materialize = (dir: string, dbName: string, image: Map<string, FileImage>)
   return dbPath;
 };
 
-const readPresent = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
+const readPresentViaEngine = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
   const present = new Set<number>();
   const db = new sqlite3.oo1.DB(dbPath, "c", DENO_VFS_NAME);
   try {
@@ -56,19 +70,52 @@ const readPresent = (sqlite3: Sqlite3, dbPath: string): Set<number> => {
   return present;
 };
 
-export const verifyReconstruction = (
+const asNumber = (v: SqlValue): number => {
+  if (typeof v !== "number") throw new Error(`expected integer, got ${String(v)}`);
+  return v;
+};
+
+const readPresentViaPublicApi = async (_sqlite3: Sqlite3, dbPath: string): Promise<Set<number>> => {
+  const present = new Set<number>();
+  using db = await openDatabase(dbPath);
+  const integrity = db.prepare<{ integrity_check: SqlValue }>("PRAGMA integrity_check").get();
+  if (integrity?.integrity_check !== "ok") {
+    throw new Error(`integrity_check=${String(integrity?.integrity_check)}`);
+  }
+  const tables = db.prepare<{ n: SqlValue }>(
+    "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='kv'",
+  ).get();
+  if (asNumber(tables?.n ?? 0) !== 1) return present;
+  for (const row of db.prepare<{ v: SqlValue }>("SELECT v FROM kv ORDER BY v").all()) {
+    present.add(asNumber(row.v));
+  }
+  return present;
+};
+
+export const ENGINE_READBACK: ReadbackDriver = {
+  label: "engine",
+  readPresent: readPresentViaEngine,
+};
+
+export const PUBLIC_API_READBACK: ReadbackDriver = {
+  label: "public-api",
+  readPresent: readPresentViaPublicApi,
+};
+
+export const verifyReconstruction = async (
   sqlite3: Sqlite3,
   dir: string,
   dbName: string,
   image: Map<string, FileImage>,
   committed: ReadonlySet<number>,
   issuedBeforeK: ReadonlySet<number>,
-): VerifyResult => {
+  driver: ReadbackDriver = ENGINE_READBACK,
+): Promise<VerifyResult> => {
   installDenoVfs(sqlite3);
   const dbPath = materialize(dir, dbName, image);
   let present: Set<number>;
   try {
-    present = readPresent(sqlite3, dbPath);
+    present = await driver.readPresent(sqlite3, dbPath);
   } catch (e) {
     return {
       ok: false,
