@@ -6,19 +6,22 @@
 
 This is a **build-in-public** repository. The engine, a pure-TypeScript Deno-filesystem VFS over the
 SQLite team's official WebAssembly build, with two concurrency modes and crash recovery, is built
-and tested against a deterministic crash/concurrency harness. As of Phase 7 the **public API has
-landed** — `openDatabase`, `Database`, typed `Statement<Row>`, transactions. It is **not yet
-published to JSR** (that is Phase 10), so you run it from a checkout, not an install. Please read
-the status section before anything else, so you know exactly what works today.
+and tested against a deterministic crash/concurrency harness. The **public API has landed** —
+`openDatabase`, `Database`, typed `Statement<Row>`, transactions — and as of Phase 8 the **full
+L1–L5 test suite** drives that shipped surface (functional, permission, crash/durability,
+concurrency, and fuzz). It is **not yet published to JSR** (that is Phase 10), so you run it from a
+checkout, not an install. Please read the status section before anything else, so you know exactly
+what works today.
 
 ---
 
-## Status: public API landed (Phase 7), not yet published
+## Status: tested & proven (Phase 8), not yet published
 
-**Phase 7 of 10 complete.** You can now `import` from [`src/mod.ts`](./src/mod.ts) and drive a real,
-typed `openDatabase` / `Database` / `Statement<Row>` surface. What is **not** done is the
-reproducible byte-identical wasm build (Phase 9) and the JSR release (Phase 10) — so there is **no
-`jsr:` install to point at yet**. The usage below is the real API shape; it runs from a clone.
+**Phase 8 of 10 complete.** You can `import` from [`src/mod.ts`](./src/mod.ts) and drive a real,
+typed `openDatabase` / `Database` / `Statement<Row>` surface, and the full L1–L5 test suite now
+proves that shipped surface end to end. What is **not** done is the reproducible byte-identical wasm
+build (Phase 9) and the JSR release (Phase 10) — so there is **no `jsr:` install to point at yet**.
+The usage below is the real API shape; it runs from a clone.
 
 |                                  |                                                                                                                                                                                                                                                                                                                                   |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -36,7 +39,7 @@ v1 - public launch
   Phase 5  Mode 1 - rollback locks     ████████████████████  100%  done
   Phase 6  Mode 2 - WAL (exclusive)    ████████████████████  100%  done
   Phase 7  Public API & bindings       ████████████████████  100%  done
-  Phase 8  Full test suite (L1–L6)     ████████░░░░░░░░░░░░   40%  in progress
+  Phase 8  Full test suite (L1–L5)     ████████████████████  100%  done  (L6 build byte-compare lands with Phase 9)
   Phase 9  Reproducible build & CI     ░░░░░░░░░░░░░░░░░░░░    0%
   Phase 10 JSR publish & docs          ░░░░░░░░░░░░░░░░░░░░    0%
 v2 - multi-process WAL                 ░░░░░░░░░░░░░░░░░░░░    0%  (gated on Deno core)
@@ -91,7 +94,7 @@ That is the whole grant: no `--allow-ffi`, no `--allow-net`, no `--allow-env`.
 
 ```bash
 git clone <this-repo> && cd sqlite-deno
-deno task check     # fmt, lint, type-check, and the full proof suite (162 tests)
+deno task check     # fmt, lint, type-check, and the full proof suite (195 tests)
 ```
 
 - The public API lives in [`src/mod.ts`](./src/mod.ts) — `openDatabase` and the `Database` /
@@ -330,7 +333,7 @@ The correctness claims here are meant to be **executable rather than taken on fa
 them and check. The whole suite runs from a clean checkout:
 
 ```bash
-deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 162 tests
+deno task check        # fmt --check, lint, type-check, type-aware lint, full test suite - 195 tests
 deno task test:soak    # Mode 1: N real OS processes, Jepsen bank, CPU-oversubscribed (env-gated)
 deno task test:soak:wal # Mode 2: multi-seed WAL crash sweep (env-gated)
 ```
@@ -389,7 +392,7 @@ every level), which is **provably correct by construction**, at the cost of seri
 > `openDatabase` itself, whose mode pragmas also take the lock) in a retry loop on
 > `SqliteBusyError`. All lock calls are non-blocking, so there is no OS deadlock. A `busyTimeout`
 > open option that would let SQLite block-and-retry for you — so callers don't hand-roll this — is a
-> tracked enhancement ([ENH-005](./.project/issues/open/)); it is **not implemented yet**, so today
+> tracked enhancement ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)); it is **not implemented yet**, so today
 > the retry loop is yours.
 
 ### Mode 2, WAL: **single-process exclusive only**
@@ -551,10 +554,12 @@ is Phase 10.
   functions in v1 (that JS-callback-reentrancy surface is one place native engines have historically
   hit use-after-free; it waits until the reentrancy model is tested). A `busyTimeout` open
   affordance, so multi-process Mode-1 callers need not hand-roll `SqliteBusyError` retry, is tracked
-  ([ENH-005](./.project/issues/open/)) but not yet built.
-- **Phase 8, Full L1–L6 test suite** (functional, permission, crash/durability, concurrency,
-  borrowed SQLite/fuzz corpora, build) — **in progress**. The L3/L4/WAL harnesses already drive the
-  shipped `openDatabase` surface.
+  ([ENH-005](https://github.com/ul0gic/sqlite-deno/issues/18)) but not yet built.
+- **Phase 8, Full L1–L5 test suite — done.** Functional, permission, crash/durability, concurrency,
+  and a generative SQL fuzzer, all driving the shipped `openDatabase` surface (the L3/L4/WAL
+  harnesses are re-pointed at the public path). L6, the reproducible-build byte-compare, lands with
+  Phase 9 because it needs the build pipeline that doesn't exist yet; the borrowed-TCL/`dbsqlfuzz`
+  corpus was ruled out of scope, a native C shim would bypass the very wasm artifact under test.
 - **Phase 9, Reproducible byte-identical wasm build.** Today the wasm is the **vendored** official
   artifact; compiling our own byte-for-byte from pinned SQLite source + pinned toolchain, with a
   `verify-build.sh` a stranger can run, is **not done**.
