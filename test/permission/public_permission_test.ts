@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { fromFileUrl } from "@std/path";
+import { basename, fromFileUrl } from "@std/path";
 
 const WORKER = fromFileUrl(import.meta.resolve("../fixtures/public_api_worker.ts"));
 const SRC = fromFileUrl(import.meta.resolve("../../src/"));
@@ -104,7 +104,7 @@ Deno.test("openDatabase through a parent-directory traversal out of the grant fa
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-trav-in-" });
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-trav-out-" });
   try {
-    const escaped = `${granted}/../${ungranted.split("/").pop()}/traversed.db`;
+    const escaped = `${granted}/../${basename(ungranted)}/traversed.db`;
     const { code, out } = await runWorker(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "traversal",

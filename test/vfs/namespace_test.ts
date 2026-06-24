@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import { isAbsolute } from "@std/path";
+import { isAbsolute, resolve } from "@std/path";
 import { loadSqlite3 } from "../../src/glue.ts";
 import { resultCodes } from "../../src/vfs/errors.ts";
 import { createVfsMethods } from "../../src/vfs/namespace.ts";
@@ -137,10 +137,14 @@ Deno.test("xFullPathname returns an absolute path unchanged (DBT-002 documented 
   const vfs = buildVfs(sqlite3);
   const dir = await Deno.makeTempDir({ prefix: "namespace-fullpath-" });
   try {
-    const path = `${dir}/abs.db`;
+    const path = resolve(dir, "abs.db");
+    assert(isAbsolute(path));
     const { code, out } = callFullPathname(sqlite3, vfs, path);
     assertEquals(code, sqlite3.capi.SQLITE_OK);
+    assert(out !== null);
+    assert(isAbsolute(out), `expected an absolute path, got ${out}`);
     assertEquals(out, path);
+    assertEquals(out, resolve(path));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -153,5 +157,5 @@ Deno.test("xFullPathname anchors a relative path to the process cwd (DBT-002)", 
   assertEquals(code, sqlite3.capi.SQLITE_OK);
   assert(out !== null);
   assert(isAbsolute(out), `expected an absolute path, got ${out}`);
-  assertEquals(out, `${Deno.cwd()}/rel.db`);
+  assertEquals(out, resolve(Deno.cwd(), "rel.db"));
 });

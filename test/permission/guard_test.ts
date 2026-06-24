@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { fromFileUrl } from "@std/path";
+import { basename, fromFileUrl } from "@std/path";
 
 const WORKER = fromFileUrl(import.meta.resolve("../fixtures/guard_worker.ts"));
 const SRC = fromFileUrl(import.meta.resolve("../../src/"));
@@ -100,7 +100,7 @@ Deno.test("guardOpen refuses a parent-directory traversal leaving the grant", as
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-guard-trav-in-" });
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-guard-trav-out-" });
   try {
-    const leaf = ungranted.split("/").pop() ?? "";
+    const leaf = basename(ungranted);
     const out = await guard(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "write",
