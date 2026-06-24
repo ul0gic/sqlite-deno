@@ -45,8 +45,17 @@ export interface OpenFile {
  * fail-closed, exactly as an `openSync` denial already does. The legitimate
  * caller's dir is the db's own (already approved at open), so this never fires on
  * the durability path; it only stops an escaped dir.
+ *
+ * Windows: a no-op. `syncSync` maps to `FlushFileBuffers`, which rejects
+ * directory handles with `ERROR_ACCESS_DENIED` (os error 5) by design — NTFS
+ * makes dentry ops (create/rename/unlink) durable via its own metadata journal,
+ * so there is no Win32 primitive to flush a directory. `os_win.c`'s `winSync`
+ * never fsyncs directories either; dir-fsync is a Unix-only construct (DEC-013).
+ * Returning before any filesystem I/O is why the grant guard is skipped here:
+ * nothing touches `dir`, so there is no out-of-grant access to refuse.
  */
 export const syncDir = (dir: string): void => {
+  if (Deno.build.os === "windows") return;
   if (!isGranted(guardPath(dir, "write"))) throw new Error("dir fsync target escapes the grant");
   using dirFd = Deno.openSync(dir, { read: true });
   dirFd.syncSync();
