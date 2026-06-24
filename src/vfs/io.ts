@@ -4,6 +4,7 @@ import type { FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { IoMethods } from "./types.ts";
 import type { ResultCodes } from "./errors.ts";
 import { createLockMethods } from "./lock.ts";
+import { isWindowsLockContention } from "./errors.ts";
 import { guardPath, isGranted } from "./guard.ts";
 
 const SECTOR_SIZE = 4096;
@@ -144,7 +145,11 @@ export const createIoMethods = (
           return rc.ioErrShortRead;
         }
         return rc.ok;
-      } catch {
+      } catch (e) {
+        // A peer's whole-file Windows lock blocks this read before SQLite's lock
+        // protocol can report contention; surface a retryable BUSY, not IOERR
+        // (BUG-006). Genuine read failures still fall through to IOERR_READ.
+        if (isWindowsLockContention(e)) return rc.busy;
         return rc.ioErrRead;
       }
     },
@@ -156,7 +161,10 @@ export const createIoMethods = (
         f.fd.seekSync(offset, Deno.SeekMode.Start);
         writeAll(f.fd, staging);
         return rc.ok;
-      } catch {
+      } catch (e) {
+        // Symmetric to xRead: a peer's whole-file Windows lock blocks this write
+        // as contention, not a real I/O fault — surface a retryable BUSY (BUG-006).
+        if (isWindowsLockContention(e)) return rc.busy;
         return rc.ioErrWrite;
       }
     },
