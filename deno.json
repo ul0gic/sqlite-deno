@@ -22,6 +22,7 @@
     "test:soak:crash": "SQLITE_DENO_SOAK=1 deno test -A test/harness/crash_sweep_soak_test.ts",
     "test:soak:wal": "SQLITE_DENO_SOAK=1 deno test -A test/harness/wal_crash_sweep_test.ts test/harness/wal_crash_sweep_public_test.ts",
     "test:soak:fuzz": "SQLITE_DENO_SOAK=1 deno test -A test/fuzz/fuzz_test.ts test/fuzz/shrink_test.ts --filter SOAK",
+    "test:soak:freeform": "SQLITE_DENO_SOAK=1 deno test -A test/harness/freeform_crash_sweep_test.ts",
     "bench": "deno bench -A",
     "build": "deno run -A build/build.ts"
   },
