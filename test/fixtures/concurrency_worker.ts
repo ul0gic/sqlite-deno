@@ -60,9 +60,16 @@ const pickTransfer = (rng: Rng): { a: number; b: number; amount: number } => {
   return { a, b, amount: 1 + rng.int(50) };
 };
 
+// BEGIN IMMEDIATE takes the write lock, so under Windows mandatory locks it is a
+// contention point that surfaces SQLITE_BUSY once busy_timeout expires (BUG-006
+// turns the peer's whole-file-lock collision into a clean retryable busy). It
+// must sit INSIDE the try so isBusy catches it and the transfer retries, exactly
+// as the public db.transaction() wraps its SAVEPOINT — out here it would crash
+// the worker (QA-009). On Linux advisory flock makes the contention vanish before
+// the timeout, so this never manifested there.
 const transferViaEngine = (db: EngineDb, a: number, b: number, amount: number): "ok" | "busy" => {
-  db.exec("BEGIN IMMEDIATE");
   try {
+    db.exec("BEGIN IMMEDIATE");
     db.exec({
       sql: "UPDATE accounts SET balance=balance-$x WHERE id=$a",
       bind: { $x: amount, $a: a },
@@ -83,11 +90,60 @@ const transferViaEngine = (db: EngineDb, a: number, b: number, amount: number): 
   }
 };
 
+interface EngineOpenOutcome {
+  readonly db: EngineDb;
+  readonly busy: number;
+}
+
+// On Windows mandatory locks, a peer holding the X-strict whole-file lock makes
+// the header read `oo1.DB`'s open performs throw SQLITE_BUSY (BUG-006) before any
+// busy_timeout can apply — so a multi-process caller must retry the open itself.
+// Bounded by attempt count, not a wall clock: under X-strict each peer's work is
+// finite and releases the lock, so the opener always eventually wins. A
+// wall-clock deadline would give up while forward progress was still possible and
+// starve a worker under heavy oversubscription — this mirrors the proven public
+// `openWithRetry` (QA-009).
+const openEngineWithRetry = (rng: Rng): EngineOpenOutcome => {
+  let busy = 0;
+  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {
+    try {
+      return { db: new sqlite3.oo1.DB(path, "w", vfsName), busy };
+    } catch (e) {
+      if (!isBusy(e)) throw e;
+      busy++;
+      backoff(rng, attempt);
+    }
+  }
+  throw new Error(
+    `worker ${workerIndex} exhausted ${MAX_BUSY_RETRIES} BUSY retries opening the db`,
+  );
+};
+
+// Mirror of readBankPublic for the engine floor: under X-strict every read takes
+// the whole-file LOCK_EX, so even an observation read can BUSY against a
+// concurrent writer (a real contention signal on Windows, BUG-006). Retry it —
+// otherwise a transient busy would be misclassified as an invariant violation
+// and fail the run spuriously (QA-009).
+const readBankViaEngine = (db: EngineDb, rng: Rng): BankSnapshot => {
+  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {
+    try {
+      return readBank(db);
+    } catch (e) {
+      if (!isBusy(e)) throw e;
+      backoff(rng, attempt);
+    }
+  }
+  throw new Error(
+    `worker ${workerIndex} exhausted ${MAX_BUSY_RETRIES} BUSY retries reading the bank`,
+  );
+};
+
 const runViaEngine = (): WorkerResult => {
   const rng = createRng(seed);
-  const db = new sqlite3.oo1.DB(path, "w", vfsName);
+  const opened = openEngineWithRetry(rng);
+  const db = opened.db;
   let committed = 0;
-  let busy = 0;
+  let busy = opened.busy;
   let invariantViolation: string | null = null;
   try {
     db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
@@ -103,7 +159,10 @@ const runViaEngine = (): WorkerResult => {
       done++;
       if (done % READ_EVERY === 0) {
         try {
-          assertBankInvariant(readBank(db), `worker ${workerIndex} after ${done} commits`);
+          assertBankInvariant(
+            readBankViaEngine(db, rng),
+            `worker ${workerIndex} after ${done} commits`,
+          );
         } catch (e) {
           invariantViolation = e instanceof Error ? e.message : String(e);
           break;
@@ -112,7 +171,7 @@ const runViaEngine = (): WorkerResult => {
     }
     if (invariantViolation === null) {
       try {
-        assertBankInvariant(readBank(db), `worker ${workerIndex} final`);
+        assertBankInvariant(readBankViaEngine(db, rng), `worker ${workerIndex} final`);
       } catch (e) {
         invariantViolation = e instanceof Error ? e.message : String(e);
       }
