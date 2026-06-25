@@ -1,3 +1,4 @@
+import { dirname } from "@std/path";
 import type { Sqlite3 } from "../../src/glue.ts";
 import { installModeVfs, type LockingMode } from "./concurrency-vfs.ts";
 
@@ -150,7 +151,7 @@ const collectOutcome = async (proc: Deno.ChildProcess, worker: number): Promise<
     new Response(proc.stderr).text(),
   ]);
   const status = await proc.status;
-  for (const line of out.split("\n")) {
+  for (const line of out.split(/\r?\n/)) {
     const r = parseWorkerResult(line);
     if (r) return { kind: "result", result: r };
   }
@@ -216,7 +217,7 @@ export const runConcurrency = async (
   sqlite3: Sqlite3,
   opts: RunOptions,
 ): Promise<RunReport> => {
-  const dir = dirOf(opts.dbPath);
+  const dir = dirname(opts.dbPath);
   const vfsName = installModeVfs(sqlite3, opts.mode);
   const seedDb = new sqlite3.oo1.DB(opts.dbPath, "c", vfsName);
   try {
@@ -274,9 +275,4 @@ const inspectFinal = (
       } catch { /* a corrupt handle may already be unusable */ }
     }
   }
-};
-
-const dirOf = (p: string): string => {
-  const idx = p.lastIndexOf("/");
-  return idx <= 0 ? "/" : p.slice(0, idx);
 };

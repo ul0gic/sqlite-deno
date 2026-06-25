@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import { fromFileUrl } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { loadSqlite3 } from "../../src/glue.ts";
 import {
   runConcurrency,
@@ -28,7 +28,7 @@ const SOAK_BUSY_TIMEOUT_MS = 120000;
 const withTempDb = async (run: (dbPath: string) => Promise<void>): Promise<void> => {
   const dir = await Deno.makeTempDir({ prefix: "conc-" });
   try {
-    await run(`${dir}/bank.db`);
+    await run(join(dir, "bank.db"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

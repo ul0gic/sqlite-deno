@@ -1,3 +1,5 @@
+import { dirname } from "@std/path";
+
 export const SECTOR_SIZE = 4096;
 
 export type Op =
@@ -13,10 +15,7 @@ export type Op =
   | { readonly kind: "delete"; readonly file: string }
   | { readonly kind: "dir-sync"; readonly dir: string; readonly real: boolean };
 
-export const dirOf = (file: string): string => {
-  const slash = file.lastIndexOf("/");
-  return slash <= 0 ? "/" : file.slice(0, slash);
-};
+export const dirOf = (file: string): string => dirname(file);
 
 export interface FileImage {
   readonly bytes: Uint8Array;

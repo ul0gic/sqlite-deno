@@ -1,3 +1,4 @@
+import { basename, join } from "@std/path";
 import type { Sqlite3 } from "../../src/glue.ts";
 import { openDatabase } from "../../src/database.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "../../src/vfs/deno.ts";
@@ -22,7 +23,7 @@ export type ReadbackDriver = {
   readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;
 };
 
-const localName = (dir: string, file: string): string => `${dir}/${file.replace(/^.*\//, "")}`;
+const localName = (dir: string, file: string): string => join(dir, basename(file));
 
 const removeIfPresent = (path: string): void => {
   try {
@@ -33,8 +34,8 @@ const removeIfPresent = (path: string): void => {
 };
 
 const materialize = (dir: string, dbName: string, image: Map<string, FileImage>): string => {
-  const base = dbName.replace(/^.*\//, "");
-  const dbPath = `${dir}/${base}`;
+  const base = basename(dbName);
+  const dbPath = join(dir, base);
   removeIfPresent(dbPath);
   removeIfPresent(`${dbPath}-journal`);
   for (const [file, img] of image) {

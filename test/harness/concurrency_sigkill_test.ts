@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import { fromFileUrl } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
 import { loadSqlite3 } from "../../src/glue.ts";
 import {
   installModeVfs,
@@ -23,7 +23,7 @@ const ATTEMPTS = 5;
 const withTempDb = async (run: (dbPath: string) => Promise<void>): Promise<void> => {
   const dir = await Deno.makeTempDir({ prefix: "conc-sigkill-" });
   try {
-    await run(`${dir}/bank.db`);
+    await run(join(dir, "bank.db"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -51,7 +51,7 @@ const spawnConcWorker = (
   txns: number,
   driver: WorkerDriver,
 ): Deno.ChildProcess => {
-  const dir = path.slice(0, path.lastIndexOf("/"));
+  const dir = dirname(path);
   return new Deno.Command(Deno.execPath(), {
     args: [
       "run",
@@ -74,7 +74,7 @@ const spawnConcWorker = (
 };
 
 const spawnVictim = (path: string): Deno.ChildProcess => {
-  const dir = path.slice(0, path.lastIndexOf("/"));
+  const dir = dirname(path);
   return new Deno.Command(Deno.execPath(), {
     args: [
       "run",
@@ -125,7 +125,7 @@ Deno.test("PUBLIC API crash recovery: a SIGKILLed writer leaves a hot journal th
         const out = await new Response(p.stdout).text();
         await new Response(p.stderr).text();
         await p.status;
-        const m = out.split("\n").find((l) => l.startsWith("RESULT "));
+        const m = out.split(/\r?\n/).find((l) => l.startsWith("RESULT "));
         return m ? Number(JSON.parse(m.slice(7)).committed) : 0;
       }));
       const peerCommits = peerResults.reduce((a, b) => a + b, 0);

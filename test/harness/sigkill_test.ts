@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import { fromFileUrl } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { loadSqlite3 } from "../../src/glue.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "../../src/vfs/deno.ts";
 
@@ -49,7 +49,7 @@ Deno.test("SIGKILL mid-write: the file DB reopens with integrity_check=ok and no
   for (let i = 0; i < ITERATIONS; i++) {
     const dir = await Deno.makeTempDir({ prefix: "sigkill-" });
     try {
-      const dbPath = `${dir}/kill.db`;
+      const dbPath = join(dir, "kill.db");
       const proc = new Deno.Command(Deno.execPath(), {
         args: [
           "run",

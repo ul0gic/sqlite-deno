@@ -1,3 +1,4 @@
+import { basename as pathBasename, join } from "@std/path";
 import type { Sqlite3 } from "../../src/glue.ts";
 import { openDatabase } from "../../src/database.ts";
 import { DENO_VFS_NAME, installDenoVfs } from "../../src/vfs/deno.ts";
@@ -22,7 +23,7 @@ export type WalReadbackDriver = {
   readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;
 };
 
-const baseName = (file: string): string => file.replace(/^.*\//, "");
+const baseName = (file: string): string => pathBasename(file);
 
 const removeIfPresent = (path: string): void => {
   try {
@@ -38,14 +39,14 @@ const materialize = (
   image: Map<string, FileImage>,
 ): string => {
   const base = baseName(dbName);
-  const dbPath = `${dir}/${base}`;
+  const dbPath = join(dir, base);
   removeIfPresent(dbPath);
   removeIfPresent(`${dbPath}-wal`);
   removeIfPresent(`${dbPath}-shm`);
   removeIfPresent(`${dbPath}-journal`);
   for (const [file, img] of image) {
     if (!img.exists) continue;
-    Deno.writeFileSync(`${dir}/${baseName(file)}`, img.bytes);
+    Deno.writeFileSync(join(dir, baseName(file)), img.bytes);
   }
   return dbPath;
 };
