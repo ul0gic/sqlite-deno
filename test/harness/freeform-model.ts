@@ -8,13 +8,8 @@ export type DbState = ReadonlyMap<string, TableState>;
 export interface CommitSnapshot {
   readonly opIndex: number;
   readonly state: DbState;
-  /**
-   * The op-index at which this txn's BEGIN opened. A txn is "in flight" at crash
-   * index `k` only when `beginOpIndex <= k < opIndex` — the window in which its
-   * pages may be on disk but its commit point (journal delete / WAL commit frame)
-   * has not landed, so an `apply-all-unsynced` reconstruction may roll it forward.
-   * Inter-txn ops (VACUUM) sit before the next BEGIN, so they never qualify.
-   */
+  // In flight at crash `k` iff beginOpIndex <= k < opIndex (commit point not yet
+  // landed, so an unsynced reconstruction may roll it forward); VACUUM never qualifies.
   readonly beginOpIndex: number;
   walSyncCoveredOpIndex: number;
 }
@@ -100,13 +95,8 @@ export const fmtCell = (c: Cell): string => {
 
 export const fmtRow = (r: Row): string => `[${r.map(fmtCell).join(",")}]`;
 
-/**
- * Exact per-table set-equality: every committed row present with equal cells, no
- * missing, no extra. Because the witness is delete-bearing (a row can be
- * committed then deleted-committed), exact equality is the only oracle that
- * catches loss, phantom, AND resurrection of a deleted row in one check — a
- * subset oracle would let a resurrected deleted-committed row pass.
- */
+// Exact set-equality, not subset: the witness is delete-bearing, so only exact
+// equality catches resurrection of a deleted-committed row alongside loss/phantom.
 export const stateMismatch = (expected: DbState, actual: DbState): TableMismatch | null => {
   for (const [name, table] of expected) {
     const got = actual.get(name) ?? new Map<number, Row>();
@@ -225,24 +215,8 @@ const nextSnapshotAfter = (
   return undefined;
 };
 
-/**
- * The committed states the post-recovery image at crash index `k` may equal.
- * Exact set-equality is checked against each. The band is the MINIMAL one the
- * durability guarantee permits — never "anything ever issued":
- *
- * - Lower bound: at `strict` (FULL) `committedStateAt(k)` is required reachable.
- *   At NORMAL the trailing commit(s) whose `-wal` sync had not landed before `k`
- *   may roll back as a PREFIX to the last sync-covered commit, so every committed
- *   snapshot from that synced boundary up to `k` is acceptable.
- * - Upper candidate: the NEXT commit's snapshot, admitted ONLY when a real model
- *   txn is in flight at `k` (`next.beginOpIndex <= k`) — the window where its
- *   pages may be on disk but its commit point has not landed, so an unsynced
- *   reconstruction may roll it forward. An inter-txn op (VACUUM) has
- *   `next.beginOpIndex > k`, so it is NOT admitted: only `committedStateAt(k)`.
- *
- * With no concurrency at most ONE txn is in flight, so at most two distinct
- * boundaries bound the band (plus the NORMAL prefix). Returned newest-first.
- */
+// Minimal durability-permitted band (newest-first): strict=FULL pins committedStateAt(k);
+// NORMAL adds the unsynced-prefix rollback + in-flight next-commit roll-forward (durability-policy).
 export const acceptableStatesAt = (
   snapshots: readonly CommitSnapshot[],
   k: number,

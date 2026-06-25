@@ -22,14 +22,8 @@ const growTo = (file: MemFile, needed: number): void => {
   file.data = next;
 };
 
-/**
- * A trivial single-process, in-memory VFS registered against the prebuilt wasm
- * via `installVfs`. Its purpose is to prove the JS↔WASM VFS boundary end to end;
- * it does no real I/O, so there is no permission surface and no FS at all.
- *
- * Every callback catches everything and returns a `SQLITE_*` code — a JS throw
- * crossing into SQLite's C is undefined behavior (see `.claude/rules/wasm.md`).
- */
+/** In-memory VFS proving the JS↔WASM boundary; no I/O, no permission surface.
+ *  Every callback returns a `SQLITE_*` code, never throws into C (wasm.md). */
 export const installMemoryVfs = (sqlite3: Sqlite3): string => {
   const { capi, wasm, struct } = sqlite3;
   if (capi.sqlite3_vfs_find(VFS_NAME)) return VFS_NAME;
@@ -37,8 +31,7 @@ export const installMemoryVfs = (sqlite3: Sqlite3): string => {
   const files = new Map<string, MemFile>();
   const open = new Map<FilePtr, MemFile>();
 
-  // The wasm hands us bare i32 addresses; brand them at the boundary so an
-  // output slot, a C string, and a file pointer can never be transposed.
+  // Brand bare wasm i32 addresses at the boundary so slot/cstr/file can't transpose.
   const asOut = (p: number): OutPtr => p as OutPtr;
   const asCStr = (p: number): CStrPtr => p as CStrPtr;
   const asFile = (p: number): FilePtr => p as FilePtr;

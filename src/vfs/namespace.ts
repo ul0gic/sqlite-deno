@@ -10,7 +10,6 @@ import { guardOpen, guardPath, isGranted } from "./guard.ts";
 
 const SQLITE_SYNC_DIR = 1;
 
-/** True when `path` has no directory entry — i.e. an open with CREATE would create one. */
 const isAbsent = (path: string): boolean => {
   try {
     Deno.statSync(path);
@@ -31,12 +30,8 @@ export interface NamespaceDeps {
   readonly setPMethods: (pFile: number, ptr: number) => void;
 }
 
-/**
- * Maps a `Deno.openSync` option set from the SQLITE_OPEN_* flags. CREATE without
- * EXCLUSIVE is `create`; CREATE with EXCLUSIVE is `createNew` (atomic O_EXCL).
- * `truncate` is never set — SQLite truncates via `xTruncate`, and a truncating
- * open would discard a database SQLite expects to read back.
- */
+// `truncate` is never set: SQLite truncates via xTruncate, and a truncating open
+// would discard a database SQLite expects to read back. CREATE+EXCLUSIVE → atomic O_EXCL.
 const openOptions = (capi: Sqlite3["capi"], flags: number): Deno.OpenOptions => {
   const write = (flags & capi.SQLITE_OPEN_READWRITE) !== 0;
   const create = (flags & capi.SQLITE_OPEN_CREATE) !== 0;
@@ -48,13 +43,6 @@ const openOptions = (capi: Sqlite3["capi"], flags: number): Deno.OpenOptions => 
   };
 };
 
-/**
- * Builds the vfs-level callbacks (`xOpen`/`xDelete`/`xAccess`/`xFullPathname`)
- * over Deno's path-based synchronous API. Every callback catches everything and
- * returns a `SQLITE_*` code — a JS throw into SQLite's C is undefined behavior.
- * A path outside the permission grant surfaces as a Deno denial that maps to a
- * result code here; the VFS never widens the grant (see `.claude/rules/security.md`).
- */
 export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
   const { sqlite3, open, rc, ioMethodsPtr, setPMethods } = deps;
   const { capi, wasm } = sqlite3;
@@ -74,14 +62,11 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.cantOpen;
-        // Canonicalize-then-recheck before any open touches the filesystem: Deno
-        // follows a symlink whose target escapes the grant (SEC-001), so refuse
-        // an escaped target here, before a create can land an empty file outside
-        // the grant. Covers every file the VFS opens — journal and wal are opened
-        // lazily mid-operation and pass through this same gate.
+        // Canonicalize-then-recheck before any open: Deno follows a symlink whose target
+        // escapes the grant (SEC-001), so refuse before a create lands a file outside it.
         if (!isGranted(guardOpen(sqlite3, path, flags))) return rc.cantOpen;
-        // os_unix.c sets UNIXFILE_DIRSYNC only when this open creates the dentry;
-        // pre-stat under a CREATE flag so the first xSync makes that dentry durable.
+        // os_unix.c sets UNIXFILE_DIRSYNC only when the open creates the dentry; pre-stat
+        // under CREATE so the first xSync makes that dentry durable.
         const createsDentry = (flags & capi.SQLITE_OPEN_CREATE) !== 0 && isAbsent(path);
         const fd = Deno.openSync(path, openOptions(capi, flags));
         open.set(asFile(pFile), {
@@ -102,11 +87,8 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.ok;
-        // Canonicalize the parent dir before unlinking: a removeSync through an
-        // in-grant directory symlink lands the unlink on an out-of-grant target
-        // (SEC-003). The final component is checked lexically — unlink removes the
-        // link itself, never its target, so a legitimate in-grant final symlink is
-        // not over-refused; only a symlinked directory component escapes.
+        // Canonicalize the parent before unlinking: a removeSync through an in-grant dir
+        // symlink would land on an out-of-grant target (SEC-003); final component is lexical.
         if (!isGranted(guardPath(dirname(path), "write"))) return rc.ioErrDelete;
         try {
           Deno.removeSync(path);
@@ -114,8 +96,8 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
           if (isNotFound(e)) return rc.ok;
           throw e;
         }
-        // os_unix.c fsyncs the parent dir after a commit-point unlink so the
-        // removed dentry is durable (the BUG-001 fix; DEC-008).
+        // fsync the parent after a commit-point unlink so the removed dentry is durable
+        // (BUG-001 fix; DEC-008), matching os_unix.c.
         if ((syncDirFlag & SQLITE_SYNC_DIR) !== 0) syncDir(dirname(path));
         return rc.ok;
       } catch {
@@ -126,21 +108,15 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         let exists = false;
-        // statSync follows the final symlink and returns the target's metadata, so
-        // an in-grant symlink to an out-of-grant file would leak its existence/size
-        // (SEC-003). Canonicalize the full path and report not-accessible (the
-        // contract's `pResOut = 0`) when it escapes — never the out-of-grant truth.
+        // statSync follows the final symlink, so an in-grant symlink to an out-of-grant
+        // file would leak its existence (SEC-003); canonicalize and report absent if escaped.
         if (path !== null && isGranted(guardPath(path, "read"))) {
           try {
             Deno.statSync(path);
             exists = true;
           } catch (e) {
-            // Only a NotFound is "does not exist" → pResOut = 0. Any other stat
-            // failure (a real PermissionDenied at the FS, a transient I/O error)
-            // means existence is *undeterminable* — fail closed with
-            // SQLITE_IOERR_ACCESS, never a false "absent": a false absent on a hot
-            // -journal/-wal makes SQLite skip recovery and run on a torn database
-            // (DEC-006 §5, mirrors os_unix.c unixAccess: non-ENOENT → IOERR_ACCESS).
+            // Non-NotFound stat failures fail closed (IOERR_ACCESS), never false "absent":
+            // a false absent on a hot -journal/-wal skips recovery on a torn db (DEC-006 §5).
             if (!isNotFound(e)) throw e;
           }
         }
@@ -154,14 +130,8 @@ export const createVfsMethods = (deps: NamespaceDeps): VfsMethods => {
       try {
         const path = nameOf(zName);
         if (path === null) return rc.cantOpen;
-        // An absolute path is returned normalized untouched; a relative one is
-        // anchored to the process cwd — @std/path `resolve` consults `Deno.cwd()`
-        // only on the relative branch (DBT-002, DEC-006 §6). The package expects
-        // absolute db paths (the public API and oo1.DB pass them), so the ambient
-        // cwd anchor is a documented fallback, never the hot path. `Deno.cwd()` is
-        // grant-free on the supported Deno; a future runtime gating it behind
-        // --allow-read would surface as a CANTOPEN on this branch only — do not
-        // "simplify" this into a path that assumes cwd is always free.
+        // `resolve` consults Deno.cwd() only on the relative branch (DBT-002, DEC-006 §6);
+        // a runtime gating cwd behind --allow-read would CANTOPEN here only — do not assume free.
         const utf8 = encoder.encode(resolve(path));
         if (utf8.length + 1 > nOut) return rc.cantOpen;
         const heap = wasm.heap8u();

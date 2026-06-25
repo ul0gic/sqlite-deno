@@ -60,13 +60,8 @@ const pickTransfer = (rng: Rng): { a: number; b: number; amount: number } => {
   return { a, b, amount: 1 + rng.int(50) };
 };
 
-// BEGIN IMMEDIATE takes the write lock, so under Windows mandatory locks it is a
-// contention point that surfaces SQLITE_BUSY once busy_timeout expires (BUG-006
-// turns the peer's whole-file-lock collision into a clean retryable busy). It
-// must sit INSIDE the try so isBusy catches it and the transfer retries, exactly
-// as the public db.transaction() wraps its SAVEPOINT — out here it would crash
-// the worker (QA-009). On Linux advisory flock makes the contention vanish before
-// the timeout, so this never manifested there.
+// BEGIN IMMEDIATE must sit inside the try so a Windows mandatory-lock BUSY retries
+// rather than crashing the worker (BUG-006, QA-009).
 const transferViaEngine = (db: EngineDb, a: number, b: number, amount: number): "ok" | "busy" => {
   try {
     db.exec("BEGIN IMMEDIATE");
@@ -95,14 +90,8 @@ interface EngineOpenOutcome {
   readonly busy: number;
 }
 
-// On Windows mandatory locks, a peer holding the X-strict whole-file lock makes
-// the header read `oo1.DB`'s open performs throw SQLITE_BUSY (BUG-006) before any
-// busy_timeout can apply — so a multi-process caller must retry the open itself.
-// Bounded by attempt count, not a wall clock: under X-strict each peer's work is
-// finite and releases the lock, so the opener always eventually wins. A
-// wall-clock deadline would give up while forward progress was still possible and
-// starve a worker under heavy oversubscription — this mirrors the proven public
-// `openWithRetry` (QA-009).
+// `oo1.DB` open throws SQLITE_BUSY before busy_timeout applies under Windows locks;
+// bound retries by attempt count, not wall clock, so progress never starves (BUG-006, QA-009).
 const openEngineWithRetry = (rng: Rng): EngineOpenOutcome => {
   let busy = 0;
   for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {
@@ -119,11 +108,8 @@ const openEngineWithRetry = (rng: Rng): EngineOpenOutcome => {
   );
 };
 
-// Mirror of readBankPublic for the engine floor: under X-strict every read takes
-// the whole-file LOCK_EX, so even an observation read can BUSY against a
-// concurrent writer (a real contention signal on Windows, BUG-006). Retry it —
-// otherwise a transient busy would be misclassified as an invariant violation
-// and fail the run spuriously (QA-009).
+// Under X-strict an observation read takes LOCK_EX and can BUSY against a writer;
+// retry or a transient busy is misread as an invariant violation (BUG-006, QA-009).
 const readBankViaEngine = (db: EngineDb, rng: Rng): BankSnapshot => {
   for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {
     try {
@@ -211,9 +197,8 @@ const readBankOnce = (db: Database): BankSnapshot => {
   }
 };
 
-// Under X-strict every read takes the whole-file LOCK_EX (no shared readers), so
-// even an observation transaction can BUSY against a concurrent writer. Retry it,
-// or a live invariant read would spuriously crash the worker.
+// Under X-strict an observation transaction takes LOCK_EX and can BUSY against a
+// writer; retry or a live invariant read crashes the worker spuriously.
 const readBankPublic = (db: Database, rng: Rng): BankSnapshot => {
   for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {
     try {
@@ -260,11 +245,8 @@ interface OpenOutcome {
   readonly busy: number;
 }
 
-// `openDatabaseWithVfs` runs `journal_mode=PERSIST` + `synchronous=FULL` during
-// open, each of which needs the whole-file X-strict lock. With no busy_timeout on
-// the public path, a peer holding the lock makes that configure step throw
-// `SqliteBusyError` — Mode 1's serialized-access contract. A real multi-process
-// caller retries the open, exactly as it retries a contending transaction().
+// The public open configures pragmas under the X-strict lock with no busy_timeout,
+// so a contending peer throws SqliteBusyError — Mode 1's serialized-access contract.
 const openWithRetry = (rng: Rng): OpenOutcome => {
   let busy = 0;
   for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt++) {

@@ -27,14 +27,7 @@ export interface CrashRecorder {
 interface CrashVfsConfig {
   readonly vfsName: string;
   readonly realSync: boolean;
-  /**
-   * When true, model `os_unix.c`'s directory fsyncs: a `dir-sync` op is emitted
-   * (a) right after the `-journal`'s first `xSync` (the create-dentry dir-sync,
-   * `UNIXFILE_DIRSYNC` riding on the first journal sync — os_unix.c `unixSync`),
-   * and (b) right after `xDelete` of the `-journal` when `syncDir & 1` (the
-   * commit-point dir-sync — os_unix.c `unixDelete`). This is the VFS-level fix
-   * for BUG-001 expressed in pure Deno via `Deno.openSync(dir).syncSync()`.
-   */
+  // Models os_unix.c directory fsyncs (dir-sync on first journal xSync and on journal xDelete with syncDir&1); BUG-001 fix.
   readonly dirSync?: boolean;
 }
 
@@ -45,17 +38,7 @@ const growTo = (file: CrashFile, needed: number): void => {
   file.data = next;
 };
 
-/**
- * A recording crash-simulation VFS (DEC-007 Layer 3a). It backs files in memory
- * like `src/vfs/memory.ts` so SQLite sees normal I/O during a workload, while
- * appending every mutating op (write/truncate/sync/delete/create) to an ordered
- * write-log with sync barriers. `reconstruct.ts` replays a prefix of that log
- * into a plausible post-crash byte image. `realSync: false` makes `xSync` lie
- * (records a non-durable barrier) for the negative control (DEC-007 §5).
- *
- * Every callback catches everything and returns a `SQLITE_*` code — a JS throw
- * crossing into SQLite's C is undefined behavior (see `.claude/rules/wasm.md`).
- */
+// Recording crash-sim VFS (DEC-007 Layer 3a): memory-backed, logs mutating ops with sync barriers; realSync:false makes xSync a non-durable barrier (negative control).
 export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRecorder => {
   const { capi, wasm, struct } = sqlite3;
   const { vfsName, realSync, dirSync = false } = cfg;
@@ -64,8 +47,7 @@ export const installCrashVfs = (sqlite3: Sqlite3, cfg: CrashVfsConfig): CrashRec
   const open = new Map<FilePtr, CrashFile>();
   let ops: Op[] = [];
 
-  // The wasm hands us bare i32 addresses; brand them at the boundary so an
-  // output slot, a C string, and a file pointer can never be transposed.
+  // Brand wasm's bare i32 addresses at the boundary so pointer kinds can't be transposed.
   const asOut = (p: number): OutPtr => p as OutPtr;
   const asCStr = (p: number): CStrPtr => p as CStrPtr;
   const asFile = (p: number): FilePtr => p as FilePtr;

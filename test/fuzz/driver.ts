@@ -44,12 +44,7 @@ export interface SequenceResult {
   readonly ops: number;
 }
 
-/**
- * Replays an explicit op list end-to-end against a freshly opened real database,
- * then checks every oracle property. The DB is disposed in `finally`; a throw
- * from dispose itself is the "dispose" property failing. The shrinker drives this
- * with arbitrary subsequences over a fresh path per candidate.
- */
+// A throw from dispose itself is the "dispose" oracle property failing.
 export const runOps = async (
   path: string,
   seed: FuzzSeed,
@@ -75,10 +70,6 @@ export const runOps = async (
   return { seed, mode, ops: ops.length };
 };
 
-/**
- * Runs one generated sequence end-to-end against a freshly opened real database,
- * then checks every oracle property.
- */
 export const runSequence = async (
   dir: string,
   seed: FuzzSeed,

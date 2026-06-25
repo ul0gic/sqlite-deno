@@ -11,13 +11,8 @@ export interface VerifyResult {
   readonly present: ReadonlySet<number>;
 }
 
-/**
- * Reads back the reconstructed image: asserts `integrity_check=ok` (I1) and
- * returns the set of present `kv.v` values (I2 is checked by the caller). A
- * driver owns *how* the reopen happens — directly via `oo1.DB` (engine floor)
- * or through the literal production `openDatabase` (the shipped reopen path,
- * which runs recovery + the rollback pragma envelope exactly as a real reopen).
- */
+// Owns *how* the reopen happens: engine floor (`oo1.DB`) vs the shipped
+// `openDatabase` path, which runs recovery + the rollback pragma envelope.
 export type ReadbackDriver = {
   readonly label: string;
   readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;

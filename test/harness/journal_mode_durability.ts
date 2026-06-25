@@ -16,13 +16,8 @@ export { journalHasValidMagic };
 
 const isJournal = (file: string): boolean => file.endsWith("-journal");
 
-/**
- * The commit-finalizing invalidation for a non-DELETE rollback mode: the journal
- * write@0 (PERSIST zeroes the header) or truncate-to-0 (TRUNCATE), occurring
- * immediately after a main-DB `xSync`. This is the analog of DELETE's `xDelete`
- * — the op whose durability decides whether a committed txn can be resurrected
- * by a zombie journal.
- */
+// The commit-finalizing invalidation (PERSIST write@0 / TRUNCATE size-0 after a main xSync):
+// the non-DELETE analog of xDelete, whose durability decides zombie-journal resurrection.
 export const finalizationIndices = (
   recorded: RecordedWorkload,
   mode: JournalMode,
@@ -68,14 +63,8 @@ export interface AbResult {
   readonly points: readonly AbPoint[];
 }
 
-/**
- * The differential, per commit finalization point: reconstruct with the
- * invalidation durable (dir durable) vs DROPPED (zero directory durability,
- * unsynced invalidation removed). `zombieJournalOnDisk` records whether the
- * dropped reconstruction actually materialized a valid-header journal — if it
- * did and the committed txn still survives, the survival is meaningful (the
- * dangerous case was exercised), not a vacuous pass.
- */
+// zombieJournalOnDisk gates a vacuous pass: survival is meaningful only when the
+// dropped reconstruction actually materialized a valid-header journal.
 export const runFinalizationAb = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,

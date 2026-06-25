@@ -38,13 +38,8 @@ const hostileValue = (rng: Rng): SqlValue => {
   return BigInt(rng.int(1_000_000)) * 1_000_000_007n;
 };
 
-/**
- * A second table whose rows are deliberately hostile (NULLs, max-size blobs,
- * unicode, embedded NUL, an SQLi-shaped string, int64-range values). Mutated by
- * UPDATE/DELETE/VACUUM inside the same transactions that advance the `kv` marker,
- * so the crash sweep exercises a broader op space while `kv` stays the durable
- * witness the I2 oracle reads back.
- */
+// Hostile second table mutated in the same txns that advance `kv`, widening the op
+// space while `kv` stays the durable I2 witness the oracle reads back.
 const auxName = "aux";
 
 const auxValueRun = (rng: Rng): ShapeStmt => ({

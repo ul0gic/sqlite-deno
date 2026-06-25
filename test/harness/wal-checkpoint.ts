@@ -94,16 +94,8 @@ const driveCheckpointRun = (
   return { ops, commits, checkpointStart, checkpointEnd };
 };
 
-/**
- * Crash *during* a checkpoint and across the frames written after it, then
- * reopen and assert I1+I2 (DEC-010 §5). The checkpoint mutates the main DB only
- * through synced writes while the `-wal` stays authoritative, so a crash at any
- * prefix recovers to a consistent committed state. The post-checkpoint commits
- * exercise the salt-advance anti-stale-replay guard for RESTART/TRUNCATE: new
- * frames carry an advanced salt, so a pre-checkpoint frame can never be
- * mis-applied after the reset — a resurfacing stale frame would corrupt
- * integrity or surface a phantom, both of which I1/I2 catch.
- */
+// Post-checkpoint commits exercise the RESTART/TRUNCATE salt-advance guard:
+// an advanced salt blocks stale pre-reset frame replay, which I1/I2 would catch (DEC-010 §5).
 export const runCheckpointCrash = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,

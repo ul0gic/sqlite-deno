@@ -1,9 +1,6 @@
 export type OracleProperty = "no-abort" | "integrity" | "usable" | "dispose";
 
-/**
- * A fuzzer oracle property failed. Carries the property and the seed so any CI
- * or soak failure replays deterministically: re-run with that seed to reproduce.
- */
+/** Carries the seed so a failure replays deterministically: re-run that seed to reproduce. */
 export class OracleViolation extends Error {
   override readonly name = "OracleViolation";
   readonly property: OracleProperty;

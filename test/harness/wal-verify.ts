@@ -12,12 +12,6 @@ export interface WalVerifyResult {
   readonly present: ReadonlySet<number>;
 }
 
-/**
- * Owns *how* a reconstructed WAL image is reopened and read back. The engine
- * floor opens `oo1.DB` in exclusive WAL mode directly; the public driver reopens
- * through the literal `openDatabase(path, { mode: "wal" })`, which runs WAL
- * recovery + the exclusive-locking envelope exactly as a real reopen would.
- */
 export type WalReadbackDriver = {
   readonly label: string;
   readonly readPresent: (sqlite3: Sqlite3, dbPath: string) => Set<number> | Promise<Set<number>>;
@@ -135,17 +129,8 @@ const checkInvariants = (present: ReadonlySet<number>, sets: CommittedSets): Wal
   return { ok: true, detail: "ok", present };
 };
 
-/**
- * Materialize a reconstructed WAL image, reopen it through the real Deno-FS VFS
- * in exclusive WAL mode, and assert I1 (`integrity_check=ok`) and I2 (every
- * `mustBePresent` value survives, no phantom). `mayBeAbsent` values are neither
- * required nor forbidden (the `synchronous=NORMAL` nuance, DEC-010 §6).
- *
- * I3: the materialized image carries no `-shm`; recovery rebuilds the heap
- * wal-index from the `-wal` alone. When `assertShmIrrelevant` is set, the same
- * image is recovered a second time with a stray `-shm` planted before reopen —
- * the recovered value set must be identical, proving the `-shm` is a pure cache.
- */
+// I3: `assertShmIrrelevant` re-recovers the same image with a stray `-shm` planted;
+// an identical value set proves recovery rebuilds the wal-index from `-wal` alone (DEC-010 §6).
 export const verifyWalReconstruction = async (
   sqlite3: Sqlite3,
   dir: string,

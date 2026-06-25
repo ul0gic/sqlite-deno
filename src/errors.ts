@@ -1,11 +1,6 @@
 import type { Sqlite3 } from "./glue.ts";
 import type { DbPtr } from "./wasm/ptr.ts";
 
-/**
- * The category an extended result code collapses to once masked to its primary
- * byte. Drives which `SqliteError` subclass the factory produces; `"other"` is
- * the base-class fallthrough for codes no caller discriminates on.
- */
 type Category =
   | "busy"
   | "constraint"
@@ -16,25 +11,17 @@ type Category =
   | "misuse"
   | "other";
 
-/** The low byte of any result code — SQLite's primary code (`rc & 0xff`). */
 const primaryOf = (rc: number): number => rc & 0xff;
 
-/**
- * The thrown shape for every SQLite failure surfaced at the public boundary.
- * Carries the primary code, the full extended code, and SQLite's own
- * diagnostic message — never the caller's path or row data (see `security.md`).
- */
+/** Thrown for every SQLite failure; carries SQLite's diagnostic, never the caller's path/data (security.md). */
 export class SqliteError extends Error {
   override readonly name: string = "SqliteError";
-  /** Primary result code (`rc & 0xff`), e.g. `SQLITE_CONSTRAINT`. */
   readonly code: number;
-  /** Full extended result code, e.g. `SQLITE_CONSTRAINT_UNIQUE`. */
   readonly extendedCode: number;
 
   constructor(message: string, code: number, extendedCode: number) {
     super(message);
-    // Restores the prototype link the class transpile target severs, so
-    // `instanceof` holds for every subclass; `new.target` is the leaf class.
+    // Restores the prototype link the transpile target severs so `instanceof` holds for subclasses.
     Object.setPrototypeOf(this, new.target.prototype);
     this.code = code;
     this.extendedCode = extendedCode;
@@ -120,14 +107,7 @@ const assertNever = (x: never): never => {
   throw new Error(`unreachable category: ${String(x)}`);
 };
 
-/**
- * Maps a SQLite result code to the matching typed error. Pass the db handle to
- * pull `sqlite3_errmsg` / `sqlite3_extended_errcode` for a precise diagnostic;
- * without it the message is SQLite's static `errstr` for the code. Unknown
- * primary codes surface as the base `SqliteError` rather than being dropped.
- * SQLite's own diagnostic may quote a bound value in a constraint message — an
- * accepted engine diagnostic, never the database file path (see `security.md`).
- */
+/** Maps a result code to its typed error; pass `db` for a precise `errmsg`, else SQLite's static `errstr`. */
 export const toSqliteError = (
   rc: number,
   sqlite3: Sqlite3,

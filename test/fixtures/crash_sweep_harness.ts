@@ -59,13 +59,8 @@ export const integrityFailures = (failures: readonly SweepFailure[]): readonly S
 export const commitLossFailures = (failures: readonly SweepFailure[]): readonly SweepFailure[] =>
   failures.filter((f) => f.detail.includes("lost committed"));
 
-/**
- * Durability failures: a committed marker vanished (I2 loss) or an unissued value
- * appeared (I2 phantom). This is the invariant that must hold under *every*
- * reconstruction variant, including the torn-write scramble models — a torn page
- * is a legitimate power-loss outcome, but losing committed data or resurrecting
- * uncommitted data never is.
- */
+// I2: a committed marker vanished or an unissued value appeared; must hold under every
+// reconstruction variant, torn-write scrambles included.
 export const durabilityFailures = (failures: readonly SweepFailure[]): readonly SweepFailure[] =>
   failures.filter((f) => f.detail.startsWith("I2"));
 

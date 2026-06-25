@@ -20,13 +20,8 @@ export interface CorruptionResult {
   readonly points: readonly CorruptionPoint[];
 }
 
-/**
- * The crash index just before the connection's clean close checkpoints the
- * `-wal` into the main DB and deletes it. Reconstructing at the workload's final
- * op would yield a `-wal`-less image (clean close drains it); we want the fully
- * populated `-wal` so a mid-log frame is meaningful. This is the op index right
- * after the last `-wal` write, before any `-wal` delete/truncate-to-zero.
- */
+// Op index right after the last `-wal` write, before any delete/truncate-to-zero:
+// clean close drains the `-wal`, so the final op would yield a `-wal`-less image.
 const lastWalIntactIndex = (ops: readonly Op[]): number => {
   let last = 0;
   for (let i = 0; i < ops.length; i++) {
@@ -47,16 +42,8 @@ const isStrictPrefix = (present: readonly number[], issued: readonly number[]): 
   return true;
 };
 
-/**
- * The WAL-specific negative control (DEC-010 §4 "negative control"): corrupt a
- * frame checksum in the *middle* of the log and confirm recovery stops there.
- * Because recovery discards the broken frame and everything after it, the
- * recovered value set MUST be a contiguous prefix of the issued sequence — if
- * the verifier ever reports a value whose commit frame is past the break, the
- * recovery (or the harness reading it) is lying. We return per-frame results so
- * the test can assert both the prefix property and that at least one corruption
- * actually drops a committed value (a vacuous all-survive run proves nothing).
- */
+// WAL negative control (DEC-010 §4): corrupting a mid-log frame checksum must make
+// recovery stop there, so the recovered value set is a contiguous prefix of issued.
 export const runMidLogCorruption = async (
   sqlite3: Sqlite3,
   recorder: CrashRecorder,

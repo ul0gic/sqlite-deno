@@ -10,20 +10,8 @@ import { guardPath, isGranted } from "./guard.ts";
 const SECTOR_SIZE = 4096;
 const SYNC_DATAONLY = 0x10;
 
-/**
- * A live file the VFS holds open. One `FsFile` backs exactly one
- * `sqlite3_file*`; it is never shared, because Deno has no positional
- * pread/pwrite and the VFS drives a shared seek offset — a second user of the
- * same handle would tear reads (see issue QA-001).
- *
- * `dirSyncPending` is `os_unix.c`'s `UNIXFILE_DIRSYNC` latch: set in `xOpen`
- * when this open created the file's directory entry, consumed on the first
- * `xSync` to make that dentry durable (DEC-008).
- *
- * `lockLevel` is the SQLite lock state (`SQLITE_LOCK_NONE`…`_EXCLUSIVE`) this
- * open believes it holds. The physical whole-file `LOCK_EX` is held iff
- * `lockLevel >= SQLITE_LOCK_SHARED` — the X-strict ladder of DEC-009.
- */
+/** One `FsFile` per `sqlite3_file*`, never shared: Deno has no pread/pwrite, so a
+ * shared seek offset would tear reads (QA-001). `dirSyncPending`: DEC-008. `lockLevel`: DEC-009. */
 export interface OpenFile {
   readonly fd: Deno.FsFile;
   readonly path: string;
@@ -32,29 +20,8 @@ export interface OpenFile {
   lockLevel: number;
 }
 
-/**
- * fsyncs the directory `dir` so a child's create/unlink dentry is durable —
- * `Deno.openSync(dir, { read: true }).syncSync()` is a real directory fsync
- * (strace-verified: `openat(O_RDONLY)` + `fsync`; DEC-008). Opening the parent
- * dir needs a read grant on the dir itself — a file-only grant does NOT cover
- * it (ENH-002); the denial fails closed as a result code and never widens the
- * grant. The handle is closed on every path.
- *
- * Canonicalize-then-recheck before the open: an in-grant directory symlink whose
- * target escapes the grant would otherwise fsync an out-of-grant dir (SEC-003).
- * A non-granted target throws — the caller's try/catch maps it to the op's IOERR,
- * fail-closed, exactly as an `openSync` denial already does. The legitimate
- * caller's dir is the db's own (already approved at open), so this never fires on
- * the durability path; it only stops an escaped dir.
- *
- * Windows: a no-op. `syncSync` maps to `FlushFileBuffers`, which rejects
- * directory handles with `ERROR_ACCESS_DENIED` (os error 5) by design — NTFS
- * makes dentry ops (create/rename/unlink) durable via its own metadata journal,
- * so there is no Win32 primitive to flush a directory. `os_win.c`'s `winSync`
- * never fsyncs directories either; dir-fsync is a Unix-only construct (DEC-013).
- * Returning before any filesystem I/O is why the grant guard is skipped here:
- * nothing touches `dir`, so there is no out-of-grant access to refuse.
- */
+/** fsyncs `dir` for child-dentry durability (DEC-008); Windows no-op (DEC-013). Guard-rechecks
+ * before open so an in-grant symlink can't fsync an escaped dir (SEC-003). */
 export const syncDir = (dir: string): void => {
   if (Deno.build.os === "windows") return;
   if (!isGranted(guardPath(dir, "write"))) throw new Error("dir fsync target escapes the grant");
@@ -64,11 +31,7 @@ export const syncDir = (dir: string): void => {
 
 export type OpenRegistry = Map<FilePtr, OpenFile>;
 
-/**
- * Copies `n` bytes of wasm heap, starting at `src`, into a fresh JS buffer. The
- * heap view is read once here and never retained — it detaches if wasm memory
- * grows, so a stale view would silently read someone else's bytes.
- */
+/** Copies into a fresh buffer; the heap view is never retained — it detaches on wasm growth. */
 const heapSlice = (sqlite3: Sqlite3, src: number, n: number): Uint8Array =>
   sqlite3.wasm.heap8u().slice(src, src + n);
 
@@ -81,11 +44,7 @@ const writeAll = (fd: Deno.FsFile, buf: Uint8Array): void => {
   }
 };
 
-/**
- * Reads up to `buf.length` bytes from the current offset, looping over short
- * counts. Returns the number of bytes actually read; a count below the request
- * (including 0 on immediate EOF) is a short read the caller must zero-fill.
- */
+/** Returns bytes read; below `buf.length` (0 on EOF) is a short read the caller zero-fills. */
 const readUpTo = (fd: Deno.FsFile, buf: Uint8Array): number => {
   let read = 0;
   while (read < buf.length) {
@@ -96,14 +55,8 @@ const readUpTo = (fd: Deno.FsFile, buf: Uint8Array): number => {
   return read;
 };
 
-/**
- * Builds the `sqlite3_io_methods` callbacks over Deno's synchronous file API.
- * Every callback catches everything and returns a `SQLITE_*` code — a JS throw
- * crossing into SQLite's C is undefined behavior (see `.claude/rules/wasm.md`).
- * Locking is the X-strict whole-file `flock` ladder (`./lock.ts`, DEC-009);
- * `xDeviceCharacteristics` returns 0 — claiming any IOCAP bit on an arbitrary
- * filesystem corrupts.
- */
+/** Every callback catches all and returns a `SQLITE_*` code — a JS throw into C is UB (wasm.md).
+ * `xDeviceCharacteristics` returns 0: claiming an IOCAP bit on an arbitrary filesystem corrupts. */
 export const createIoMethods = (
   sqlite3: Sqlite3,
   open: OpenRegistry,
@@ -146,9 +99,7 @@ export const createIoMethods = (
         }
         return rc.ok;
       } catch (e) {
-        // A peer's whole-file Windows lock blocks this read before SQLite's lock
-        // protocol can report contention; surface a retryable BUSY, not IOERR
-        // (BUG-006). Genuine read failures still fall through to IOERR_READ.
+        // A peer's Windows lock blocks the read as contention, not an I/O fault — BUSY (BUG-006).
         if (isWindowsLockContention(e)) return rc.busy;
         return rc.ioErrRead;
       }
@@ -162,8 +113,7 @@ export const createIoMethods = (
         writeAll(f.fd, staging);
         return rc.ok;
       } catch (e) {
-        // Symmetric to xRead: a peer's whole-file Windows lock blocks this write
-        // as contention, not a real I/O fault — surface a retryable BUSY (BUG-006).
+        // Symmetric to xRead: a peer's Windows lock blocks the write as contention, BUSY (BUG-006).
         if (isWindowsLockContention(e)) return rc.busy;
         return rc.ioErrWrite;
       }

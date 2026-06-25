@@ -8,22 +8,14 @@ export type { FileStruct, IoMethodsStruct, VfsStruct } from "./wasm/struct.ts";
 
 const WASM_URL = import.meta.resolve("./wasm/sqlite3.wasm");
 
-/**
- * Typed constructors for the binder structs. They reinterpret each freshly
- * created instance through the precise `$`-member surface the upstream `.d.mts`
- * omits — the single boundary where the binder's generated accessors are typed.
- */
+/** Typed constructors for the binder structs — the one boundary that types the binder's `$` accessors. */
 export interface StructFactory {
   readonly vfs: (ptr?: number) => VfsStruct;
   readonly ioMethods: () => IoMethodsStruct;
   readonly file: (ptr?: number) => FileStruct;
 }
 
-/**
- * The instantiated SQLite engine plus the marshaling surface our VFS needs.
- * `installVfs` and the struct binders are how a pure-JS VFS attaches to the
- * prebuilt wasm without a recompile.
- */
+/** The instantiated engine plus the marshaling surface a pure-JS VFS attaches through (no recompile). */
 export interface Sqlite3 {
   readonly capi: Sqlite3Static["capi"];
   readonly wasm: Sqlite3Static["wasm"];
@@ -56,9 +48,7 @@ const toSqlite3 = (s: Sqlite3Static): Sqlite3 => ({
   oo1: s.oo1,
   version: s.version,
   struct: {
-    // The binder instances carry the generated `$` accessors the upstream types
-    // omit; each view extends its upstream struct, so this is a downcast to the
-    // accurate runtime shape — the one boundary where that surface is asserted.
+    // Downcast to the runtime shape: binder instances carry the generated `$` accessors upstream types omit.
     vfs: (ptr) =>
       (ptr === undefined ? new s.capi.sqlite3_vfs() : new s.capi.sqlite3_vfs(ptr)) as VfsStruct,
     ioMethods: () => new s.capi.sqlite3_io_methods() as IoMethodsStruct,
@@ -67,29 +57,19 @@ const toSqlite3 = (s: Sqlite3Static): Sqlite3 => ({
 });
 
 const silenceBundledVfsProbes = async (wasmBinary: Uint8Array): Promise<Sqlite3Static> => {
-  // The bundled OPFS auto-installers run on bootstrap and warn to the console
-  // because Deno has no `globalThis.location`. Route the one-time bootstrap
-  // warnings to no-ops; the module reads and deletes this config itself, so the
-  // override is gone after instantiation.
+  // Bundled OPFS auto-installers warn on bootstrap (Deno has no `globalThis.location`); silence them.
   const host = globalThis as unknown as ConfigHost;
   const prior = host.sqlite3ApiConfig;
   host.sqlite3ApiConfig = { warn: () => {}, error: () => {} };
   try {
     return await sqlite3InitModule({ wasmBinary });
   } finally {
-    // The module deletes the key during bootstrap; restoring `undefined` leaves
-    // the falsy state the bootstrap expects if no prior config was present.
+    // Bootstrap deletes the key; restoring `undefined` keeps the falsy state it expects.
     host.sqlite3ApiConfig = prior;
   }
 };
 
-/**
- * Instantiates the engine once and reuses it. The wasm is read from the package
- * via a `file:` fetch (no `--allow-net`, no remote download) and handed its own
- * bytes, so the only capability required is read access to the vendored
- * `sqlite3.wasm`. The wasm itself has no ambient authority — all I/O flows back
- * out through our VFS.
- */
+/** Instantiate once and reuse; wasm read via `file:` fetch, so the sole capability is read on the vendored bytes. */
 export const loadSqlite3 = (): Promise<Sqlite3> => {
   instance ??= readWasmBytes().then(silenceBundledVfsProbes).then(toSqlite3);
   return instance;

@@ -60,9 +60,8 @@ const buildSchema = (rng: Rng, tableCount: number): GeneratedSchema => {
     const columns: string[] = [];
     for (let c = 0; c < colCount; c++) columns.push(`c${c}`);
     tables.push({ name, columns });
-    // Columns are declared BLOB-affinity (typeless): SQLite then stores exactly
-    // what is bound with no INTEGER/REAL/TEXT coercion, so the reference model's
-    // bound cells equal the read-back cells and the exact-equality oracle is sound.
+    // BLOB affinity: SQLite stores bound values verbatim (no coercion), so model cells equal
+    // read-back cells and the exact-equality oracle holds.
     const colsDdl = columns.map((c) => `${c} BLOB`).join(", ");
     ddl.push(`CREATE TABLE ${name}(id INTEGER PRIMARY KEY, ${colsDdl})`);
   }
@@ -73,14 +72,8 @@ const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_I64 = 2n ** 63n - 1n;
 const MIN_I64 = -(2n ** 63n);
 
-/**
- * The public bind path (`marshal.bindValue`) rejects an integer-valued double
- * outside signed int64 (e.g. `Number.MAX_VALUE`), while `oo1.DB`'s bind path
- * accepts it — a binding-path divergence the marshal-misuse fuzz suite owns, not
- * this durability generator. Map such a value to a representative bigint so both
- * drivers store the SAME cell and the lockstep model stays sound; the i64
- * boundaries are still exercised via the bigint arm of `fuzzValue`.
- */
+// marshal.bindValue rejects an integer double outside i64 while oo1.DB accepts it; clamp so both
+// drivers store the same cell and lockstep stays sound (the i64 edges live in fuzzValue's bigint arm).
 const bindable = (c: Cell): Cell => {
   if (typeof c !== "number" || !Number.isInteger(c)) return c;
   const i64 = BigInt(c);

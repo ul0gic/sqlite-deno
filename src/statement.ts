@@ -10,48 +10,24 @@ export interface StatementHandle {
 
 export type StatementRegistry = Set<StatementHandle>;
 
-/** The outcome of a mutating statement run for its row count and inserted id. */
 export interface RunResult {
-  /** Rows inserted, updated, or deleted by the most recent execution. */
   readonly changes: number;
   /** `rowid` of the last inserted row — `bigint` past 2^53, else `number`. */
   readonly lastInsertRowid: number | bigint;
 }
 
 /**
- * A compiled, reusable statement yielding rows of `Row`. Each call binds the
- * given positional parameters (1-based `?`), runs, and resets the statement for
- * the next call. The owning database finalizes it on close; finalize it sooner
- * with `using` or `[Symbol.dispose]`. Calling any method after finalize throws
- * `SqliteMisuseError`.
+ * Compiled, reusable statement; each call re-binds and resets. The owning db
+ * finalizes on close — sooner via `using`; any method after finalize throws.
  */
 export interface Statement<Row> {
-  /**
-   * Runs the statement and returns the first row, or `undefined` if none.
-   * Executes the statement — a mutating statement run through `get` still writes.
-   */
+  /** Every run method executes even a mutating statement — `get`/`all`/`iter`/`stream` all write. */
   readonly get: (...params: readonly SqlValue[]) => Row | undefined;
-  /**
-   * Runs the statement and collects every row. Executes the statement — a
-   * mutating statement run through `all` still writes.
-   */
   readonly all: (...params: readonly SqlValue[]) => Row[];
-  /**
-   * Runs the statement and yields rows lazily. The statement is reset when the
-   * iterator is exhausted, broken out of (`break`/`return`), or disposed — so an
-   * early exit never leaves the statement mid-scan. Executes the statement — a
-   * mutating statement run through `iter` still writes.
-   */
+  /** Resets when exhausted, broken out of, or disposed — early exit never leaves a mid-scan cursor. */
   readonly iter: (...params: readonly SqlValue[]) => IterableIterator<Row>;
-  /** Runs a mutating statement, returning its change count and last insert id. */
   readonly run: (...params: readonly SqlValue[]) => RunResult;
-  /**
-   * Runs the statement and exposes its rows as a backpressured `ReadableStream`:
-   * each pull steps the cursor once, so a slow consumer never overruns memory.
-   * Cancelling or fully draining resets the statement for reuse. Only one stream
-   * or run can be live on a statement at a time — a second resets the first.
-   * Executes the statement — a mutating statement run through `stream` still writes.
-   */
+  /** Backpressured: one cursor step per pull. Only one stream/run live at a time — a second resets the first. */
   readonly stream: (...params: readonly SqlValue[]) => ReadableStream<Row>;
   readonly [Symbol.dispose]: () => void;
 }
@@ -63,11 +39,9 @@ const prepare = (sqlite3: Sqlite3, db: DbPtr, sql: string): StmtPtr => {
     const ppStmt = wasm.pstack.alloc(4);
     const rc = capi.sqlite3_prepare_v3(db, sql, -1, 0, ppStmt, null);
     if (rc !== capi.SQLITE_OK) throw toSqliteError(rc, sqlite3, db);
-    // The out-pointer holds an `sqlite3_stmt*`; one boundary reinterpret of the
-    // ABI i32 into the branded handle.
+    // Boundary reinterpret of the ABI i32 out-pointer into the branded `sqlite3_stmt*`.
     const ptr = wasm.peekPtr(ppStmt) as StmtPtr;
-    // Empty or comment-only SQL prepares to OK with a null handle; wrapping it
-    // would crash on the first `step`/`column_*`, so reject it as misuse.
+    // Empty/comment-only SQL prepares OK with a null handle; reject as misuse.
     if (ptr === 0) {
       throw new SqliteMisuseError(
         "no statement to prepare (empty or comment-only SQL)",
@@ -110,17 +84,14 @@ export const createStatement = <Row>(
 
   const readRow = (): Row => {
     const cols = columnNames();
-    // Null-prototype so a column named `__proto__` (or `constructor`) is a plain
-    // own data property — not the `Object.prototype` setter that would silently
-    // drop the value — and no prototype is reachable to pollute.
+    // Null-prototype: a column named `__proto__`/`constructor` stays a plain data property, no pollution.
     const row: Record<string, SqlValue> = Object.create(null);
     for (let i = 0; i < cols.length; i++) {
       const key = cols[i];
       if (key === undefined) continue;
       row[key] = readColumn(sqlite3, stmt, i);
     }
-    // The caller declares `Row` as its claim about the column shape; building a
-    // `Record<string, SqlValue>` and asserting it is the single Row coercion.
+    // `Row` is the caller's claim about column shape; this is the single Row coercion.
     return row as Row;
   };
 
@@ -183,9 +154,8 @@ export const createStatement = <Row>(
     start(params);
     try {
       while (step());
-      // `sqlite3_changes`/`last_insert_rowid` are connection-global: correct only
-      // because they are read synchronously here, right after step-DONE and before
-      // any other statement on this db runs. Do not defer this read.
+      // `changes`/`last_insert_rowid` are connection-global: read synchronously here,
+      // before any other statement on this db runs. Do not defer.
       return {
         changes: capi.sqlite3_changes(db),
         lastInsertRowid: narrowInt(capi.sqlite3_last_insert_rowid(db)),
@@ -196,15 +166,12 @@ export const createStatement = <Row>(
   };
 
   const stream = (...params: readonly SqlValue[]): ReadableStream<Row> => {
-    // `start(params)` runs in the first `pull`, not the stream's own `start`: a
-    // throw there (use-after-finalize, a bind failure) escapes the constructor
-    // synchronously, but inside `pull` it surfaces to the consumer as a stream
-    // error. One `step()` per pull is the backpressure — never drain ahead.
+    // `start` runs in the first `pull`, not the stream's `start`, so a throw surfaces
+    // as a stream error to the consumer rather than synchronously from the constructor.
     let started = false;
     let gen = 0;
-    // Reset only if this stream still owns the cursor: a later `all`/`get`/stream
-    // bumps `generation`, so a stale stream's error/cancel cleanup would otherwise
-    // reset the new run's bindings (`start` captures the generation it began).
+    // Reset only while this stream still owns the cursor: a later run bumps `generation`,
+    // so stale cleanup would otherwise reset the new run's bindings.
     const ownsCursor = (): boolean => !finalized && started && gen === generation;
     return new ReadableStream<Row>({
       pull: (controller) => {
@@ -225,8 +192,7 @@ export const createStatement = <Row>(
         }
       },
       cancel: () => {
-        // Resetting a finalized handle is use-after-free across the wasm boundary
-        // (`wasm.md`); resetting after another run took over corrupts that run.
+        // Resetting a finalized handle is use-after-free across the wasm boundary (`wasm.md`).
         if (ownsCursor()) reset();
       },
     });

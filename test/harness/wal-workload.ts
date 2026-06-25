@@ -25,28 +25,12 @@ export interface WalWorkloadSpec {
   readonly rowsPerTxn: number;
   readonly dbName: string;
   readonly synchronous: Synchronous;
-  /**
-   * When set, mixes the same seeded property-generated op space the rollback
-   * sweep uses (`workload-shape.ts` — a hostile auxiliary table touched by
-   * UPDATE/DELETE inside each marker txn, plus VACUUM between txns) on top of the
-   * `kv` marker inserts. `kv` stays the durable witness the WAL I2 oracle reads
-   * back, so the committed-set invariant remains checkable while the WAL sweep
-   * covers more than sequential single-column inserts. VACUUM-in-WAL must engage
-   * through our VFS with no `-shm` and `iVersion==1` (DEC-010).
-   */
+  /** Mixes the seeded property workload over the `kv` markers; `kv` stays the I2 witness. */
   readonly shapeSeed?: number;
 }
 
 export type WalCommitSink = (value: number) => void;
 
-/**
- * Owns *how* the WAL workload reaches the engine — directly via `oo1.DB` with the
- * hand-written `locking_mode=EXCLUSIVE`/`journal_mode=WAL` pragma sequence (the
- * engine floor), or through the public `openDatabaseWithVfs` seam at
- * `{ mode: "wal", durability }` (the shipped path). Either way the driver must
- * leave WAL engaged with no `-shm` on disk; the recording and sync-coverage
- * machinery downstream is driver-agnostic.
- */
 export interface WalWorkloadDriver {
   readonly label: string;
   readonly write: (
@@ -137,16 +121,8 @@ const writeViaPublicApi: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, 
   }
 };
 
-/** Drives the WAL workload straight through `oo1.DB` (engine floor). */
 export const ENGINE_WAL_DRIVER: WalWorkloadDriver = { label: "engine", write: writeViaEngine };
 
-/**
- * Drives the WAL workload through the public `openDatabaseWithVfs` seam at
- * `{ mode: "wal", durability }` (durability maps from the spec's `synchronous`):
- * the shipped envelope runs `locking_mode=EXCLUSIVE` + `journal_mode=WAL` +
- * `synchronous`, and `Database.prepare`/`run` + the savepoint `transaction()`
- * carry the writes. Proves WAL recovery over the literal shipped surface.
- */
 export const PUBLIC_API_WAL_DRIVER: WalWorkloadDriver = {
   label: "public-api",
   write: writeViaPublicApi,
@@ -154,14 +130,8 @@ export const PUBLIC_API_WAL_DRIVER: WalWorkloadDriver = {
 
 const COMMIT_FRAME_NOT_YET_SYNCED = Number.MAX_SAFE_INTEGER;
 
-/**
- * The op-index of the first `-wal` `xSync` at or after `commitOpIndex`. A WAL
- * commit's durability rests solely on a `-wal` sync covering its commit frame
- * (DEC-010 §2). At `FULL`/`EXTRA` SQLite syncs the `-wal` before acknowledging
- * the commit, so this index is `<= commitOpIndex`'s own returned point; at
- * `NORMAL` the covering sync may not arrive until a later commit or a
- * checkpoint, which is the §6 durability nuance the verifier keys on.
- */
+// First `-wal` xSync at or after `commitOpIndex`: a WAL commit is durable only once
+// its commit frame is `-wal`-synced (DEC-010 §2); at NORMAL that sync may lag the commit.
 const walSyncCoverageOf = (ops: readonly Op[], commitOpIndex: number): number => {
   for (let i = commitOpIndex; i < ops.length; i++) {
     const op = ops[i];
@@ -197,15 +167,8 @@ export interface CommittedSets {
   readonly everIssued: ReadonlySet<number>;
 }
 
-/**
- * Partition the workload's values at crash index `k` per the `synchronous`
- * level (DEC-010 §6). A value is `mustBePresent` only if its COMMIT returned
- * before `k` AND a `-wal` sync covering its commit frame also occurred before
- * `k`. At `FULL`/`EXTRA` the covering sync precedes the commit's acknowledgement
- * so every returned COMMIT is required. At `NORMAL` a returned-but-not-yet-
- * `-wal`-synced commit is `mayBeAbsent` — a power-loss reconstruction may drop
- * it without an I2 violation. `everIssued` bounds the phantom check.
- */
+// Partition values at crash index `k` per `synchronous` (DEC-010 §6): at NORMAL a
+// returned-but-not-yet-`-wal`-synced commit is `mayBeAbsent`, not required.
 export const committedSetsAt = (
   recorded: RecordedWalWorkload,
   k: number,

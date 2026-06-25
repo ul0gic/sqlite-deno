@@ -9,13 +9,7 @@ export {
   parseLockingMode,
 } from "./concurrency-vfs.ts";
 
-/**
- * Which surface a worker drives the bank workload through. `engine` is the
- * `oo1.DB` floor with hand-rolled `BEGIN IMMEDIATE`/`COMMIT` and a manual
- * busy-retry; `public` drives `openDatabaseWithVfs` + `db.prepare`/`run` + the
- * savepoint `db.transaction()` and retries on a caught `SqliteBusyError` — the
- * shipped contract under real multi-process contention.
- */
+/** `engine` = oo1.DB floor with manual BEGIN IMMEDIATE/busy-retry; `public` = shipped API path. */
 export const WORKER_DRIVERS = ["engine", "public"] as const;
 export type WorkerDriver = (typeof WORKER_DRIVERS)[number];
 
@@ -62,12 +56,7 @@ export interface BankSnapshot {
   readonly balances: readonly number[];
 }
 
-/**
- * Reads the whole bank inside one deferred read transaction so the sum, the
- * per-row balances, and `commit_count` come from a single consistent point —
- * the torn-read detector depends on the read being atomic with respect to any
- * concurrent transfer.
- */
+// One deferred read txn so sum, balances, and commit_count are atomic vs concurrent transfers.
 export const readBank = (db: Db): BankSnapshot => {
   db.exec("BEGIN");
   try {
@@ -205,14 +194,6 @@ export interface RunReport {
   readonly integrity: string;
 }
 
-/**
- * Seeds the bank, spawns `workers` real OS subprocesses that hammer the one DB
- * file in Mode 1, collects each worker's self-reported invariant verdict, then
- * reopens the DB in the parent and verifies the end-of-run invariants:
- * balance-sum conservation, `integrity_check`/`quick_check` = ok, and the
- * monotonic-commit predicate (`commit_count` == total driver-tracked commits).
- * The DB directory is `dirname(dbPath)`; the caller owns its lifecycle.
- */
 export const runConcurrency = async (
   sqlite3: Sqlite3,
   opts: RunOptions,
@@ -244,13 +225,7 @@ export const runConcurrency = async (
 
 const CORRUPT_SNAPSHOT: BankSnapshot = { sum: -1, commitCount: -1, balances: [] };
 
-/**
- * Reopens the DB in the parent for the end-of-run verdict. A negative-control
- * run can leave the file so corrupt that `integrity_check` or even reading the
- * bank throws — that is a *detected* corruption, not a harness fault, so the
- * thrown message becomes the `integrity` verdict and the snapshot reads as the
- * sentinel that fails every conservation check.
- */
+// A throw here is detected corruption, not a harness fault: surface it as the verdict + sentinel.
 const inspectFinal = (
   sqlite3: Sqlite3,
   dbPath: string,

@@ -7,18 +7,8 @@ import { createVfsMethods } from "./namespace.ts";
 const VFS_NAME = "deno-fs";
 const MAX_PATHNAME = 1024;
 
-/**
- * Registers a file-backed VFS over Deno's synchronous file API against the
- * prebuilt wasm via `installVfs`. All I/O flows out through these callbacks,
- * which reach the filesystem only through path-based `Deno.*Sync` — the wasm has
- * no ambient authority, so the blast radius is exactly the paths the caller
- * granted (see `.claude/rules/security.md`).
- *
- * Mode 1 locking is the X-strict whole-file `flock` ladder (DEC-009): safe
- * multi-process *serialized* access — one accessor at a time, no concurrent
- * readers. A contending connection needs a `busy_timeout` to retry the
- * `SQLITE_BUSY` rather than fail immediately.
- */
+/** Registers the file-backed VFS; I/O honors the caller's grant (security.md).
+ * Locking is the X-strict serialized `flock` ladder — contenders need busy_timeout (DEC-009). */
 export const installDenoVfs = (sqlite3: Sqlite3): string => {
   const { capi, wasm, struct } = sqlite3;
   if (capi.sqlite3_vfs_find(VFS_NAME)) return VFS_NAME;

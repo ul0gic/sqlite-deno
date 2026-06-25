@@ -13,23 +13,13 @@ export interface ShrinkResult {
   readonly attempts: number;
 }
 
-/**
- * Prepares the DB file a candidate runs against — e.g. materializing a corrupt
- * template so an on-disk-corruption violation reproduces on a fresh path. When
- * omitted, each candidate starts from an empty DB.
- */
+/** Materializes the DB file a candidate runs against (e.g. a corrupt template); omit for empty. */
 export type PreparePath = (path: string) => void | Promise<void>;
 
 export interface ShrinkOptions {
   readonly prepare?: PreparePath;
 }
 
-/**
- * Replays a candidate against a fresh DB and reports whether it reproduces the
- * same oracle `property`. A different property (or a clean run) does not count —
- * the shrink target is the *same* failure, never a different one the smaller
- * sequence happens to trip.
- */
 const reproduces = async (
   dir: string,
   seed: FuzzSeed,
@@ -46,6 +36,7 @@ const reproduces = async (
     await runOps(path, seed, mode, ops);
     return false;
   } catch (e) {
+    // Only the *same* property counts; a different violation is not a smaller witness.
     return e instanceof OracleViolation && e.property === property;
   }
 };
@@ -55,12 +46,6 @@ const removeChunk = <T>(xs: readonly T[], start: number, len: number): readonly 
   ...xs.slice(start + len),
 ];
 
-/**
- * ddmin-style delta debugging: at each granularity, try deleting every chunk of
- * the current op list; keep the first deletion that still reproduces and restart
- * at the same granularity; when no chunk can be deleted, halve the chunk size.
- * Terminates at single-op granularity, yielding a 1-minimal subsequence.
- */
 export const shrinkSequence = async (
   dir: string,
   seed: FuzzSeed,

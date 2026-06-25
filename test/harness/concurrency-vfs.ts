@@ -19,19 +19,8 @@ export const parseLockingMode = (v: string): LockingMode => {
 
 const MAX_PATHNAME = 1024;
 
-/**
- * Registers a Mode-1 VFS that reuses the real `createIoMethods`/`createVfsMethods`
- * but lets the harness pick the lock protocol. `xstrict` is the shipped DEC-009
- * ladder verbatim (real `xLock`/`xUnlock`/`xCheckReservedLock`); `defeated` swaps
- * only those three callbacks for no-ops, reproducing the Phase-3
- * concurrent-unsynchronized-writers behaviour that is the mandatory negative
- * control. `src/` is never touched — the override wraps the public `IoMethods`
- * object after `createIoMethods` builds it, so the no-op seam exists solely in
- * test code (DEC-009 negative-control discipline).
- *
- * Each mode gets a distinct VFS name so a process can register either without
- * the `sqlite3_vfs_find` early-return colliding.
- */
+// `defeated` no-ops the lock ladder as the mandatory negative control (DEC-009);
+// distinct VFS name per mode keeps the `sqlite3_vfs_find` early-return from colliding.
 export const installModeVfs = (sqlite3: Sqlite3, mode: LockingMode): string => {
   const vfsName = `deno-fs-conc-${mode}`;
   const { capi, wasm, struct } = sqlite3;

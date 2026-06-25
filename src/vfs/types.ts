@@ -5,13 +5,7 @@ type VfsMethodsArg = NonNullable<
   Parameters<Sqlite3Static["vfs"]["installVfs"]>[0]["vfs"]
 >["methods"];
 
-/**
- * The runtime contract for the io-methods callbacks. It diverges from the
- * upstream `.d.mts` in two verified ways: i64 parameters (`offset`, `size`)
- * arrive as `bigint` (the build enables BigInt), and methods like `xSectorSize`
- * return a plain integer, not a `SQLITE_*` result code. We model what actually
- * crosses the boundary.
- */
+/** Actual runtime io-methods: i64 params arrive as `bigint`; `xSectorSize` returns a plain int, not a result code (diverges from upstream `.d.mts`). */
 export interface IoMethods {
   readonly xClose: (pFile: number) => number;
   readonly xRead: (pFile: number, pDest: number, n: number, offset: bigint) => number;
@@ -40,9 +34,7 @@ export interface VfsMethods {
   readonly xFullPathname: (pVfs: number, zName: number, nOut: number, zOut: number) => number;
 }
 
-// The upstream method types mis-state i64 params as `number` and constrain
-// returns to the `Sqlite3Result` union; `installMethods` only reads the function
-// values, so a cast at this boundary reconciles our accurate runtime types with
-// the installer's signature.
+// Boundary cast: installMethods only reads the function values, reconciling the
+// accurate runtime types with upstream's i64-as-number, result-union signature.
 export const asIoMethodsArg = (m: IoMethods): IoMethodsArg => m as unknown as IoMethodsArg;
 export const asVfsMethodsArg = (m: VfsMethods): VfsMethodsArg => m as unknown as VfsMethodsArg;

@@ -3,27 +3,15 @@ import type { FilePtr, OutPtr } from "../wasm/ptr.ts";
 import type { OpenRegistry } from "./io.ts";
 import type { ResultCodes } from "./errors.ts";
 
-/** The X-strict lock ladder (`xLock`/`xUnlock`/`xCheckReservedLock`) of `IoMethods`. */
+/** The X-strict lock ladder of `IoMethods`. */
 export interface LockMethods {
   readonly xLock: (pFile: number, lockType: number) => number;
   readonly xUnlock: (pFile: number, lockType: number) => number;
   readonly xCheckReservedLock: (pFile: number, pResOut: number) => number;
 }
 
-/**
- * Builds the Mode 1 lock ladder over whole-file `flock`, X-strict (DEC-009):
- * exactly `os_unix.c`'s `flockLock`/`flockUnlock`/`flockCheckReservedLock`. The
- * VFS holds `LOCK_EX` for ANY lock level ≥ SHARED and NEVER holds `LOCK_SH` —
- * so there is no upgrade path and the non-atomic-`flock`-upgrade hazard
- * (BUG-002) is structurally unreachable. The cost is no concurrent readers:
- * multi-process *serialized* access, one accessor at a time.
- *
- * `tryLockSync` is non-blocking by design — `lockSync` would hang the
- * single-threaded event loop and is forbidden (DEC-009). A lock *conflict*
- * (another connection holds `LOCK_EX`) returns `SQLITE_BUSY`, the signal
- * SQLite's busy-handler retries on; a `flock` syscall *throw* maps to
- * `SQLITE_IOERR_LOCK`/`_UNLOCK` and never crosses into C (`.claude/rules/wasm.md`).
- */
+/** Mode 1 X-strict `flock` ladder: always `LOCK_EX`, never `LOCK_SH`, so no
+ * upgrade hazard (DEC-009, BUG-002) at the cost of serialized multi-process access. */
 export const createLockMethods = (
   sqlite3: Sqlite3,
   open: OpenRegistry,
@@ -70,10 +58,8 @@ export const createLockMethods = (
     },
     xCheckReservedLock: (pFile: number, pResOut: number): number => {
       try {
-        // X-strict only ever holds LOCK_EX — fully mutually exclusive, so no
-        // peer ever holds a RESERVED lock to report. Hot-journal recovery is
-        // gated by the LOCK_EX that xLock(SHARED) takes, not by this probe
-        // (DEC-009). Do not "fix" this to probe the file.
+        // X-strict holds only LOCK_EX, so no peer ever holds RESERVED to report;
+        // recovery is gated by xLock(SHARED)'s LOCK_EX, not this probe (DEC-009).
         if (!open.has(asFile(pFile))) return rc.ioErrCheckReservedLock;
         wasm.poke32(asOut(pResOut), 0);
         return rc.ok;

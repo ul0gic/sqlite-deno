@@ -32,13 +32,8 @@ const scrambleLastSector = (bytes: Uint8Array, syncedSize: number, rng: Rng): Ui
   return out;
 };
 
-/**
- * The byte length of the `-wal` covered by a successful `xSync` at crash index
- * `k` — the size at the last real `-wal` `xSync` at or before `k`. DEC-007 §1:
- * synced data is durable and MUST survive, so a tail mutation may only ever
- * drop/scramble bytes beyond this point. A truncation or tear below it would
- * model a broken disk, not power loss — the harness must never do it.
- */
+// Size at the last real `-wal` xSync at or before k; tail mutations may only
+// touch bytes beyond it — below is durable synced data (DEC-007 §1).
 const syncedWalSize = (ops: readonly Op[], walFile: string, k: number): number => {
   let liveSize = 0;
   let synced = 0;
@@ -56,14 +51,8 @@ const syncedWalSize = (ops: readonly Op[], walFile: string, k: number): number =
   return synced;
 };
 
-/**
- * Apply a WAL-specific tail mutation to the `-wal` image — the cases DEC-010 §2
- * names beyond the generic content power-loss: a `-wal` cut at a frame boundary
- * (an append-log torn between frames) and a torn final frame (its last sector
- * scrambled). Both must recover to a consistent committed prefix (I1) and never
- * surface a partial transaction (I2). When there are no whole frames, the
- * mutation is a no-op — there is nothing to tear.
- */
+// WAL-specific tail mutations beyond the generic content power-loss (DEC-010 §2):
+// cut at a frame boundary, or tear the final frame; no-op when no whole frames.
 const mutateWalTail = (
   bytes: Uint8Array,
   mutation: WalTailMutation,
@@ -89,13 +78,8 @@ export interface WalReconstructResult {
   readonly hasShm: boolean;
 }
 
-/**
- * Reconstruct a post-crash {main DB, `-wal`} image: the generic content
- * power-loss (`reconstruct`) plus a `-wal`-specific tail mutation. Mode-2 WAL
- * never writes a `-shm`, so the image must carry none; `hasShm` is reported so
- * the sweep can assert I3 — a stray `-shm` is never present, and recovery
- * rebuilds the heap wal-index from the `-wal` alone.
- */
+// `hasShm` is reported so the sweep can assert I3: Mode-2 WAL writes no `-shm`,
+// recovery rebuilds the heap wal-index from the `-wal` alone.
 export const reconstructWal = (
   ops: readonly Op[],
   k: number,

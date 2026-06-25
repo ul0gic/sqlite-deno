@@ -75,13 +75,8 @@ const runTxn = (db: Database, op: TxnOp, seed: number): void => {
   }
 };
 
-/**
- * Runs one fuzzed operation, enforcing the no-abort property: the only failures
- * allowed to surface are `SqliteError` (the typed contract), the synthetic
- * `FuzzRollback` (a generated `using`-rollback), and `OracleViolation` (a real
- * property failure, which propagates untouched). Anything else is a native abort
- * leaking across the WASM/C boundary — re-thrown as a seeded `OracleViolation`.
- */
+// Enforces no-abort: only SqliteError, the synthetic FuzzRollback, and OracleViolation may
+// surface; anything else is a native abort across the WASM/C boundary, re-thrown as an OracleViolation.
 export const execOp = (db: Database, op: FuzzOp, seed: number): void => {
   try {
     if (op.kind === "txn") runTxn(db, op, seed);

@@ -28,32 +28,16 @@ export interface WorkloadSpec {
   readonly rowsPerTxn: number;
   readonly dbName: string;
   readonly journalMode?: JournalMode;
-  /**
-   * `PRAGMA synchronous`. EXTRA is the level at which SQLite sets `extraSync`
-   * and so passes `syncDir=1` to `xDelete` of the `-journal` (pager.c
-   * `extraSync` is set only for `PAGER_SYNCHRONOUS_EXTRA`). That commit-point
-   * directory fsync is the os_unix.c step the dir-sync VFS variant honors.
-   */
+  // Only EXTRA sets pager.c `extraSync`, passing `syncDir=1` to the `-journal`
+  // xDelete — the commit-point dir fsync the dir-sync VFS variant honors.
   readonly synchronous?: Synchronous;
-  /**
-   * When set, mixes a seeded property-generated op space (a hostile auxiliary
-   * table touched by UPDATE/DELETE inside each marker txn, plus VACUUM between
-   * txns) on top of the `kv` marker inserts. `kv` stays the durable witness the
-   * I2 oracle reads back, so the committed-set invariant remains checkable while
-   * the sweep covers more than sequential single-column inserts.
-   */
+  // `kv` stays the durable witness the I2 oracle reads back; the seed only mixes
+  // a hostile auxiliary op space on top, keeping the committed-set check valid.
   readonly shapeSeed?: number;
 }
 
 export type CommitSink = (value: number) => void;
 
-/**
- * Runs the bank-counter workload against the crash VFS and records the commit
- * boundaries. A driver owns *how* the SQL reaches the engine — directly via
- * `oo1.DB` (the engine floor) or through the public `Database` surface (the
- * shipped path). The recorded op stream feeds the reconstruct/sweep machinery,
- * which is driver-agnostic.
- */
 export interface WorkloadDriver {
   readonly label: string;
   readonly write: (
@@ -137,27 +121,17 @@ const writeViaPublicApiWith =
     runPublicApiTxns(db, spec, onCommit);
   };
 
-/** Drives the workload's open/exec/commit straight through `oo1.DB` (engine floor). */
 export const ENGINE_DRIVER: WorkloadDriver = { label: "engine", write: writeViaEngine };
 
-/**
- * Drives the workload through the public surface at the **shipped rollback
- * default** (`durability: "full"`, BUG-004 fix): `openDatabase`'s seam runs
- * `journal_mode=PERSIST` + `synchronous=FULL`, and `Database.prepare`/`run` + the
- * savepoint `transaction()` carry the writes. The `spec`'s `journalMode`/
- * `synchronous` are ignored — the point is to prove the *shipped* envelope.
- */
+// Shipped rollback default proving the durable envelope; spec journalMode/
+// synchronous are ignored here, the seam pins PERSIST + FULL (BUG-004).
 export const PUBLIC_API_DRIVER: WorkloadDriver = {
   label: "public-api-full",
   write: writeViaPublicApiWith({ durability: "full" }),
 };
 
-/**
- * The public surface at the weaker opt-in `durability: "normal"`
- * (`synchronous=NORMAL`). Consistency-safe but may lose the latest committed txn
- * on power loss — the harness pins this so the weakness stays documented and
- * proven distinct from the durable default (BUG-004).
- */
+// Weaker opt-in `durability: "normal"`: consistency-safe but may lose the last
+// committed txn on power loss — pinned distinct from the durable default (BUG-004).
 export const PUBLIC_API_NORMAL_DRIVER: WorkloadDriver = {
   label: "public-api-normal",
   write: writeViaPublicApiWith({ durability: "normal" }),

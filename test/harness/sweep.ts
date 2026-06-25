@@ -19,9 +19,7 @@ export interface SweepConfig {
   readonly seed: number;
   readonly reconstructionsPerPoint: number;
   readonly dentryDurable: boolean;
-  /** How the workload is driven — engine floor (default) or the public surface. */
   readonly workloadDriver?: WorkloadDriver;
-  /** How the post-crash image is reopened — engine floor (default) or the public surface. */
   readbackDriver?: ReadbackDriver;
 }
 

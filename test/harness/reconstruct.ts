@@ -57,15 +57,7 @@ const grow = (buf: Uint8Array, size: number, needed: number): Uint8Array => {
   return next;
 };
 
-/**
- * A `dir-sync` makes the *current* set of dentries in that directory durable —
- * POSIX `fsync` on the directory fd. For every file in the dir: if it currently
- * exists, its create-dentry is now durable (no longer droppable); if it was
- * deleted, its unlink-dentry is now durable (the zombie can no longer be
- * resurrected). Dentry changes after this point stay droppable until the next
- * dir-sync — faithful to DEC-007 §4 (a dentry change is durable only when an
- * explicit directory sync has covered it).
- */
+// A dentry change is durable only once a directory fsync has covered it (DEC-007 §4).
 const applyDirSync = (states: Map<string, FileState>, dir: string): void => {
   for (const [file, s] of states) {
     if (dirOf(file) !== dir) continue;
@@ -95,9 +87,8 @@ const applyOps = (ops: readonly Op[], k: number): Map<string, FileState> => {
       s.liveExists = true;
       for (const sec of touchedSectors(op.offset, op.bytes.length)) s.dirtySectors.add(sec);
     } else if (op.kind === "truncate") {
-      // Truncate changes the file size but rewrites no retained byte, so it dirties
-      // no sector — marking the boundary sector dirty would let the scramble model
-      // tear already-synced committed data (a state no power loss can produce).
+      // Truncate rewrites no retained byte, so dirty no sector: a dirty boundary
+      // sector would let the scramble model tear already-synced committed data.
       s.liveSize = op.size;
     } else if (op.kind === "delete") {
       if (s.syncedSize > 0 || s.syncedExists) {

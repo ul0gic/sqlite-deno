@@ -18,12 +18,8 @@ const seedCorruptDb = async (path: string): Promise<void> => {
   await Deno.writeFile(path, bytes);
 };
 
-/**
- * The oracle's negative control: a DB corrupted on disk through nothing but the
- * public API plus a byte overwrite. Running any sequence over it must trip the
- * `integrity` (or `no-abort`/`usable`) property — proving the oracle can fail.
- * Returns the `OracleViolation` it caught.
- */
+// Oracle negative control: a publicly-corrupted DB must trip integrity/no-abort/usable,
+// proving the oracle can fail. Returns the caught OracleViolation.
 export const catchCorruptionViolation = async (dir: string): Promise<OracleViolation> => {
   const path = `${dir}/teeth.db`;
   await seedCorruptDb(path);

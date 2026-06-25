@@ -112,13 +112,11 @@ Deno.test("a real UNIQUE violation classifies through the db handle", async () =
     db.exec("INSERT INTO t(id, email) VALUES (1, 'a@b.c')");
     const ptr = db.pointer;
     assert(typeof ptr === "number");
-    // Reinterpret the upstream WasmPointer as our branded db handle — the one
-    // boundary cast for an external sqlite3* the ABI gives us as a bare number.
-    const handle = ptr as DbPtr;
+    const handle = ptr as DbPtr; // boundary cast: bare sqlite3* number to branded handle
     try {
       db.exec("INSERT INTO t(id, email) VALUES (2, 'a@b.c')");
     } catch {
-      // The throw is expected; the handle now carries the failing rc.
+      // expected throw leaves the failing rc on the handle
     }
     const classified = toSqliteError(SQLITE_CONSTRAINT, sqlite3, handle);
     assertInstanceOf(classified, SqliteConstraintError);
@@ -141,7 +139,7 @@ Deno.test("the db-handle message comes from sqlite3_errmsg, not the static errst
     try {
       db.exec("INSERT INTO t(id, v) VALUES (1, NULL)");
     } catch {
-      // The throw is expected; the handle now carries the failing rc.
+      // expected throw leaves the failing rc on the handle
     }
     const classified = toSqliteError(SQLITE_CONSTRAINT, sqlite3, handle);
     assertInstanceOf(classified, SqliteConstraintError);

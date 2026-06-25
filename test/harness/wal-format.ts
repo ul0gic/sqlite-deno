@@ -28,13 +28,7 @@ export interface WalLayout {
 const viewOf = (bytes: Uint8Array): DataView =>
   new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-/**
- * A `-wal` is parseable iff it carries a valid 32-byte header magic and a
- * power-of-two page size whose frame slots fit the file exactly. A torn or
- * truncated tail leaves a fractional final frame; we report only whole frames
- * (recovery discards a fractional tail, DEC-010 §1.3), so a fractional tail is
- * not a parse failure — it is simply not counted as a frame.
- */
+// Reports only whole frames; a fractional tail is not a parse failure (recovery discards it, DEC-010 §1.3).
 export const parseWal = (bytes: Uint8Array): WalLayout | null => {
   if (bytes.byteLength < WAL_HEADER_SIZE) return null;
   const dv = viewOf(bytes);
@@ -96,13 +90,7 @@ export const truncateMidFrame = (
   return bytes.slice(0, cut);
 };
 
-/**
- * Flip the high bit of one payload byte of a frame so its running checksum no
- * longer validates. DEC-010 §1.3: recovery stops at the first frame whose
- * checksum fails, discarding it and everything after. We never need to forge a
- * passing checksum — corrupting a byte reliably invalidates it, which is the
- * direction the mid-log negative control exercises.
- */
+// Corrupting a payload byte invalidates the frame checksum; recovery stops at the first such frame (DEC-010 §1.3).
 export const corruptFramePayload = (
   bytes: Uint8Array,
   layout: WalLayout,
