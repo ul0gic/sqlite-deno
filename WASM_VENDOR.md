@@ -62,4 +62,4 @@ bash build/verify-build.sh
 The fetch is the **only** network access and happens only here, scoped to `registry.npmjs.org`. The
 package itself never fetches anything at install or runtime; `deno.json` and `deno.lock` carry no
 npm specifier, and the glue is imported by relative path. A mismatch on either the tarball shasum or
-the per-file byte comparison fails the check with a typed `ProvenanceError` naming the reason.
+the per-file byte comparison fails the check with a typed `ProvenanceError` that names the reason.
