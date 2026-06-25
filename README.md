@@ -389,12 +389,19 @@ every level), which is **provably correct by construction**, at the cost of seri
 
 > **The multi-process Mode-1 contract:** a contending caller gets a `SqliteBusyError` (the lock is
 > held). Pass a `busyTimeout` open option (milliseconds) to let SQLite block-and-retry the contended
-> lock for you — it is applied before the open-time mode pragmas, so it covers `openDatabase` itself
-> as well as later `db.transaction()` calls, and a multi-process caller no longer has to wrap the
-> open in its own retry. All lock calls are non-blocking, so there is no OS deadlock. The default is
-> `0` (immediate `SqliteBusyError`, fully backward-compatible); a non-zero timeout is not a
-> guarantee — a sufficiently contended serialized workload can still exhaust it, so a caller-side
-> retry loop on `SqliteBusyError` stays the ultimate backstop.
+> lock for you — it is applied before the open-time mode pragmas, so on POSIX it covers
+> `openDatabase` itself as well as later `db.transaction()` calls. All lock calls are non-blocking,
+> so there is no OS deadlock. The default is `0` (immediate `SqliteBusyError`, fully
+> backward-compatible); a non-zero timeout is not a guarantee — a sufficiently contended serialized
+> workload can still exhaust it, so a caller-side retry loop on `SqliteBusyError` stays the ultimate
+> backstop.
+>
+> **Windows caveat:** Windows file locks are mandatory, not advisory like POSIX `flock`, so a peer's
+> whole-file lock makes the database-header read that `openDatabase` performs fail _before_ the
+> connection's `busy_timeout` can apply. There, `busyTimeout` does **not** cover the open itself,
+> and a multi-process caller **must** wrap `openDatabase` in a `SqliteBusyError` retry loop (it
+> still covers later `db.transaction()` calls). On POSIX the open generally proceeds, so the
+> open-retry is moot.
 
 ### Mode 2, WAL: **single-process exclusive only**
 
