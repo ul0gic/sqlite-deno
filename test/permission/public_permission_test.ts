@@ -125,7 +125,7 @@ Deno.test("openDatabase through a symlink escaping the grant is refused before a
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-sym-out-" });
   try {
     await Deno.mkdir(`${ungranted}/real`);
-    await Deno.symlink(`${ungranted}/real`, `${granted}/link`);
+    await Deno.symlink(`${ungranted}/real`, `${granted}/link`, { type: "dir" });
     const escapedReal = `${ungranted}/real/secret.db`;
     const { code, out } = await runWorker(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
@@ -149,7 +149,7 @@ Deno.test("openDatabase through a symlinked final component escaping the grant i
   try {
     await Deno.mkdir(`${ungranted}/real`);
     const escapedReal = `${ungranted}/real/final.db`;
-    await Deno.symlink(escapedReal, `${granted}/finallink.db`);
+    await Deno.symlink(escapedReal, `${granted}/finallink.db`, { type: "file" });
     const { code, out } = await runWorker(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "symlink",
@@ -168,7 +168,7 @@ Deno.test("openDatabase through an in-grant symlink whose target stays inside th
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-pub-syminside-" });
   try {
     await Deno.mkdir(`${granted}/real`);
-    await Deno.symlink(`${granted}/real`, `${granted}/link`);
+    await Deno.symlink(`${granted}/real`, `${granted}/link`, { type: "dir" });
     const { code, out } = await runWorker(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "inside",

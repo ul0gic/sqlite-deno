@@ -83,7 +83,7 @@ Deno.test("a symlink whose target escapes the grant is refused by the VFS guard 
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-perm-sym-out-" });
   try {
     await Deno.mkdir(`${ungranted}/real`);
-    await Deno.symlink(`${ungranted}/real`, `${granted}/link`);
+    await Deno.symlink(`${ungranted}/real`, `${granted}/link`, { type: "dir" });
     const escapedReal = `${ungranted}/real/secret.db`;
     const { code, out } = await runWorker(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],

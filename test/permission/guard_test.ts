@@ -48,7 +48,7 @@ Deno.test("guardOpen grants an in-grant symlink whose target stays inside the gr
   const dir = await Deno.makeTempDir({ prefix: "sqlite-deno-guard-symin-" });
   try {
     await Deno.mkdir(`${dir}/real`);
-    await Deno.symlink(`${dir}/real`, `${dir}/link`);
+    await Deno.symlink(`${dir}/real`, `${dir}/link`, { type: "dir" });
     const out = await guard(
       [`--allow-read=${SRC},${dir}`, `--allow-write=${dir}`],
       "write",
@@ -65,7 +65,7 @@ Deno.test("guardOpen reports escaped for a symlinked directory component pointin
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-guard-symdir-out-" });
   try {
     await Deno.mkdir(`${ungranted}/real`);
-    await Deno.symlink(`${ungranted}/real`, `${granted}/link`);
+    await Deno.symlink(`${ungranted}/real`, `${granted}/link`, { type: "dir" });
     const out = await guard(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "write",
@@ -83,7 +83,7 @@ Deno.test("guardOpen reports escaped for a symlinked final component pointing ou
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-guard-symfin-out-" });
   try {
     await Deno.mkdir(`${ungranted}/real`);
-    await Deno.symlink(`${ungranted}/real/final.db`, `${granted}/finallink.db`);
+    await Deno.symlink(`${ungranted}/real/final.db`, `${granted}/finallink.db`, { type: "file" });
     const out = await guard(
       [`--allow-read=${SRC},${granted}`, `--allow-write=${granted}`],
       "write",

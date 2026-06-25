@@ -38,7 +38,7 @@ Deno.test("xDelete through an in-grant directory symlink leaves the out-of-grant
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-vfsdel-in-" });
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-vfsdel-out-" });
   try {
-    await Deno.symlink(ungranted, `${granted}/sub`);
+    await Deno.symlink(ungranted, `${granted}/sub`, { type: "dir" });
     const escaped = `${ungranted}/victim.db-journal`;
     await Deno.writeTextFile(escaped, "out-of-grant");
     const out = await runWorker(
@@ -73,7 +73,7 @@ Deno.test("xAccess through an in-grant symlink to an out-of-grant file reports n
   try {
     const escaped = `${ungranted}/secret.db`;
     await Deno.writeTextFile(escaped, "out-of-grant metadata");
-    await Deno.symlink(escaped, `${granted}/peek.db`);
+    await Deno.symlink(escaped, `${granted}/peek.db`, { type: "file" });
     const out = await runWorker(scopedToGrant(granted), "access", `${granted}/peek.db`);
     assertEquals(out, "REFUSED");
     assertEquals(existsSync(escaped), true);
@@ -95,13 +95,13 @@ Deno.test("xAccess of an in-grant file still reports accessible (SEC-003 no over
   }
 });
 
-Deno.test("syncDir through an in-grant directory symlink refuses to fsync the out-of-grant dir (SEC-003)", async () => {
+Deno.test("syncDir through an in-grant directory symlink never fsyncs the out-of-grant dir: refused on POSIX, a no-op on Windows where no dir-fsync primitive exists (SEC-003, DEC-013)", async () => {
   const granted = await Deno.makeTempDir({ prefix: "sqlite-deno-vfssync-in-" });
   const ungranted = await Deno.makeTempDir({ prefix: "sqlite-deno-vfssync-out-" });
   try {
-    await Deno.symlink(ungranted, `${granted}/sub`);
+    await Deno.symlink(ungranted, `${granted}/sub`, { type: "dir" });
     const out = await runWorker(scopedToGrant(granted), "syncdir", `${granted}/sub/app.db`);
-    assertEquals(out, "REFUSED");
+    assertEquals(out, Deno.build.os === "windows" ? "NOOP_NO_FSYNC" : "REFUSED");
   } finally {
     await Deno.remove(granted, { recursive: true });
     await Deno.remove(ungranted, { recursive: true });

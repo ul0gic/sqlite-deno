@@ -50,9 +50,20 @@ if (mode === "access") {
 }
 
 if (mode === "syncdir") {
+  const dir = dirname(target);
+  const escapedReal = (() => {
+    try {
+      return Deno.realPathSync(dir);
+    } catch {
+      return dir;
+    }
+  })();
+  const escapeIsOutOfGrant =
+    Deno.permissions.querySync({ name: "write", path: escapedReal }).state !== "granted";
   try {
-    syncDir(dirname(target));
-    emit("SYNCED");
+    syncDir(dir);
+    if (Deno.build.os === "windows" && escapeIsOutOfGrant) emit("NOOP_NO_FSYNC");
+    else emit("SYNCED");
   } catch {
     emit("REFUSED");
   }
