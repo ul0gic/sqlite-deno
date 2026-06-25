@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "@std/path";
+import { basename, dirname, isAbsolute, resolve } from "@std/path";
 import type { Sqlite3 } from "../glue.ts";
 import { isNotFound } from "./errors.ts";
 
@@ -28,13 +28,6 @@ export type GuardResult =
 const GRANTED: GuardResult = { kind: "granted" };
 const PARENT_UNREADABLE: GuardResult = { kind: "parent-unreadable" };
 
-const splitTrailing = (path: string): { readonly dir: string; readonly base: string } => {
-  const i = path.lastIndexOf("/");
-  if (i < 0) return { dir: ".", base: path };
-  if (i === 0) return { dir: "/", base: path.slice(1) };
-  return { dir: path.slice(0, i), base: path.slice(i + 1) };
-};
-
 /**
  * Resolves a final path component that is itself a symlink, relative or absolute,
  * against its own directory. A dangling symlink (target absent) still resolves —
@@ -50,6 +43,11 @@ const resolveFinalLink = (path: string, dir: string): string => {
  * every symlink resolved — including a symlinked final component and a not-yet-
  * existing create target (whose parent dir is canonicalized, basename appended).
  * Throws `NotCapable` when the read grant needed to walk the path is missing.
+ *
+ * Parent/leaf are split with `@std/path` `dirname`/`basename`, OS-aware so a
+ * Windows backslash, drive letter, or UNC path resolves to the real parent — a
+ * `lastIndexOf("/")` split returned `"."` (the cwd) for any backslash path,
+ * silently canonicalizing against the wrong directory on Windows (BUG-007).
  */
 const canonicalize = (path: string): string => {
   let info: Deno.FileInfo;
@@ -59,15 +57,13 @@ const canonicalize = (path: string): string => {
     if (!isNotFound(e)) throw e;
     // Create-path: the leaf does not exist. Canonicalize the parent (resolves a
     // symlinked directory component) and re-append the leaf name.
-    const { dir, base } = splitTrailing(path);
-    return resolve(Deno.realPathSync(dir), base);
+    return resolve(Deno.realPathSync(dirname(path)), basename(path));
   }
   if (!info.isSymlink) return Deno.realPathSync(path);
   // The leaf itself is a symlink. realPathSync would follow it, but a *dangling*
   // link target throws NotFound — resolve the link target lexically instead so a
   // dangling escape (e.g. G/link -> O/absent.db) is still caught.
-  const { dir } = splitTrailing(path);
-  return resolveFinalLink(path, dir);
+  return resolveFinalLink(path, dirname(path));
 };
 
 const neededMode = (capi: Sqlite3["capi"], flags: number): Deno.PermissionName => {
