@@ -3,6 +3,17 @@
   "version": "0.0.0",
   "license": "MIT",
   "exports": "./src/mod.ts",
+  "publish": {
+    "include": [
+      "LICENSE",
+      "README.md",
+      "deno.json",
+      "src/**/*.ts",
+      "src/wasm/sqlite3.wasm",
+      "src/wasm/sqlite3.mjs",
+      "src/wasm/index.d.mts"
+    ]
+  },
   "tasks": {
     "check": "deno fmt --check && deno lint && deno check src/mod.ts && deno task lint:biome && deno test -A",
     "lint:biome": "bash tools/install-biome.sh && tools/.bin/biome lint --error-on-warnings .",
