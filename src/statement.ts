@@ -11,6 +11,7 @@ export interface StatementHandle {
 export type StatementRegistry = Set<StatementHandle>;
 
 export interface RunResult {
+  /** Rows changed by the last INSERT/UPDATE/DELETE (SQLite `sqlite3_changes`). */
   readonly changes: number;
   /** `rowid` of the last inserted row — `bigint` past 2^53, else `number`. */
   readonly lastInsertRowid: number | bigint;
@@ -23,9 +24,11 @@ export interface RunResult {
 export interface Statement<Row> {
   /** Every run method executes even a mutating statement — `get`/`all`/`iter`/`stream` all write. */
   readonly get: (...params: readonly SqlValue[]) => Row | undefined;
+  /** Every row at once; for large or streaming result sets prefer `iter`/`stream`. */
   readonly all: (...params: readonly SqlValue[]) => Row[];
   /** Resets when exhausted, broken out of, or disposed — early exit never leaves a mid-scan cursor. */
   readonly iter: (...params: readonly SqlValue[]) => IterableIterator<Row>;
+  /** For INSERT/UPDATE/DELETE/DDL; returns the changes count and lastInsertRowid. */
   readonly run: (...params: readonly SqlValue[]) => RunResult;
   /** Backpressured: one cursor step per pull. Only one stream/run live at a time — a second resets the first. */
   readonly stream: (...params: readonly SqlValue[]) => ReadableStream<Row>;

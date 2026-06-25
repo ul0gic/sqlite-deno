@@ -18,10 +18,12 @@ pure-TypeScript VFS that maps SQLite's file I/O onto Deno's filesystem API. The 
 Deno's permission model fully intact (no FFI, no network, no ambient filesystem) and to run
 everywhere Deno runs, including Deno Deploy and the edge.
 
-The README has the full story, the honest limitations, and the comparison with the alternatives.
-Read [the status section](./README.md#-status-engine-working-and-tested-library-not-yet-usable)
-first — the engine works and is tested, but the public `Database`/`Statement` API is not built yet
-(that is Phase 7).
+The README has the full story, the honest limitations, and the comparison with the alternatives —
+and [ARCHITECTURE.md](./ARCHITECTURE.md) has the engineering depth (the VFS, the lock ladder, the
+WAL flow, and the crash/durability model). The public `Database` / `Statement` API has landed
+(v0.1.0) and is proven against the full crash/concurrency/fuzz suite; the
+[capability envelope](./README.md#the-capability-envelope-the-honest-asterisks) states the honest
+limitations plainly.
 
 ---
 

@@ -4,11 +4,11 @@ The reason this project exists is to be a SQLite for Deno that does not weaken D
 model. Security is the design constraint, not an afterthought, so this policy explains the model the
 package is built on, what is in and out of scope for a report, and how to report a vulnerability.
 
-> **Status note.** There is no usable library release yet — the public `Database`/`Statement` API is
-> not built (it is Phase 7; see the [README](./README.md)). What exists today is the engine: a
-> pure-TypeScript Deno-filesystem VFS over the official SQLite WebAssembly build, with
-> crash/concurrency proofs. A report against the engine, the VFS, or the supply-chain claims is
-> welcome and in scope.
+> **Status note.** The public `Database` / `Statement` API has landed (v0.1.0) over a
+> pure-TypeScript Deno-filesystem VFS on the official SQLite WebAssembly build, with
+> crash/concurrency proofs and the provenance-verified vendored wasm (see the
+> [README](./README.md)). A report against the public API, the VFS, the WASM boundary, or the
+> supply-chain claims is welcome and in scope.
 
 ---
 
@@ -44,20 +44,22 @@ your grant). The [README permission section](./README.md#the-permission-story) h
 
 The same honest limits the README states apply here:
 
-- **The engine is at the proven-but-pre-API stage.** The VFS, both concurrency modes, and the
-  crash-recovery behavior are built and tested against a deterministic crash/concurrency harness.
-  There is no published library release to apply a security fix to yet, so "supported versions" is
-  best read as: the `main` branch is where fixes land.
+- **The public API and the engine are proven and tested.** The public `Database` / `Statement`
+  surface, the VFS, both concurrency modes, and the crash-recovery behavior are tested against a
+  deterministic crash/concurrency harness. Fixes land on the `main` branch and ship in the next
+  tagged release.
 - **Durability is verified on Linux.** Directory-fsync durability on **Windows is unverified** — do
   not rely on it. **NFS and other networked filesystems are unsupported**, the same as native
   SQLite.
 - **The crash proofs are model-bounded** — a worst-legal-device power-loss model plus
   `strace`-verified primitives, not real-hardware power-cut testing. A hardware rig is a later
   release-hardening layer.
-- **The WASM is vendored today, not yet self-built.** It is the official `@sqlite.org/sqlite-wasm`
-  build, committed in-package (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). The reproducible
-  byte-for-byte build from pinned source, with a `verify-build.sh` a stranger can run, is Phase 9
-  and not done yet.
+- **The WASM is the official artifact, verifiably.** We ship the SQLite team's official
+  `@sqlite.org/sqlite-wasm` build, committed in-package and pinned to an exact version, with a
+  one-command `build/verify-build.sh` anyone can run to byte-compare the committed bytes against the
+  pinned official release (see [`WASM_VENDOR.md`](./WASM_VENDOR.md)). We do not self-compile the
+  wasm; trust anchors to the official signed release, not to our toolchain. The package fetches
+  nothing at install or runtime.
 
 ---
 
@@ -104,8 +106,9 @@ genuinely valued, and credit will be given to reporters who want it.
 - Crash / power-loss data-loss or corruption that the harness should have caught — committed data
   lost, uncommitted data applied, or an `integrity_check` failure on a supported configuration
   (Linux).
-- Supply-chain integrity issues — a way the shipped WASM could differ from the pinned source, or a
-  dependency concern.
+- Supply-chain integrity issues — a way the shipped WASM could differ from the pinned official
+  `@sqlite.org/sqlite-wasm` release without `build/verify-build.sh` catching it, or a dependency
+  concern.
 
 ## What is out of scope
 
