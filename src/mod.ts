@@ -1,5 +1,5 @@
 /** Package version; release tooling keeps this in lockstep with `deno.json`. */
-export const VERSION = "0.0.0";
+export const VERSION = "0.1.0";
 
 export { openDatabase } from "./database.ts";
 export type { Database, OpenMode, OpenOptions } from "./database.ts";
