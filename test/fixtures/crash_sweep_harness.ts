@@ -69,23 +69,6 @@ export const commitLossFailures = (failures: readonly SweepFailure[]): readonly 
 export const durabilityFailures = (failures: readonly SweepFailure[]): readonly SweepFailure[] =>
   failures.filter((f) => f.detail.startsWith("I2"));
 
-const SCRAMBLE_VARIANTS = ["scramble-tail", "scramble-arbitrary-sector"] as const;
-
-const isScramble = (variant: string): boolean =>
-  (SCRAMBLE_VARIANTS as readonly string[]).includes(variant);
-
-/**
- * Integrity (I1) failures from the sync/dentry-boundary reconstructions only
- * (`drop-all-unsynced`/`apply-all-unsynced`). Integrity must hold there. The
- * torn-write scramble variants are excluded because a torn page mid-rewrite
- * (e.g. inside a VACUUM) can legitimately fail `integrity_check` without any
- * durability violation — that intersection is tracked separately (QA-005).
- */
-export const boundaryIntegrityFailures = (
-  failures: readonly SweepFailure[],
-): readonly SweepFailure[] =>
-  failures.filter((f) => f.detail.startsWith("I1") && !isScramble(f.variant));
-
 export interface MatrixCell {
   readonly journalMode?: WorkloadSpec["journalMode"];
   readonly synchronous?: WorkloadSpec["synchronous"];

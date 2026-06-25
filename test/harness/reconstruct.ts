@@ -95,8 +95,10 @@ const applyOps = (ops: readonly Op[], k: number): Map<string, FileState> => {
       s.liveExists = true;
       for (const sec of touchedSectors(op.offset, op.bytes.length)) s.dirtySectors.add(sec);
     } else if (op.kind === "truncate") {
+      // Truncate changes the file size but rewrites no retained byte, so it dirties
+      // no sector — marking the boundary sector dirty would let the scramble model
+      // tear already-synced committed data (a state no power loss can produce).
       s.liveSize = op.size;
-      for (const sec of touchedSectors(Math.max(0, op.size - 1), 1)) s.dirtySectors.add(sec);
     } else if (op.kind === "delete") {
       if (s.syncedSize > 0 || s.syncedExists) {
         s.zombie = s.synced;

@@ -3,6 +3,7 @@ import { PUBLIC_API_DRIVER, PUBLIC_API_NORMAL_DRIVER } from "./workload.ts";
 import { PUBLIC_API_READBACK } from "./verify.ts";
 import {
   commitLossFailures,
+  durabilityFailures,
   fmtFailures,
   integrityFailures,
   runMatrixSweep,
@@ -125,6 +126,37 @@ Deno.test(
       0,
       `the public prepare/run + savepoint path produced a CORRUPT (I1) database:\n${
         fmtFailures(integrityFailures(res.failures))
+      }`,
+    );
+  },
+);
+
+Deno.test(
+  "torn-write standing proof: a VACUUM post-commit truncate + a scramble reconstruction never corrupts an already-synced committed page (the truncate rewrites no retained byte)",
+  async () => {
+    const res = await runMatrixSweep({
+      cell: { journalMode: "DELETE", synchronous: "EXTRA", dirSync: true, dentryDurable: false },
+      txns: 6,
+      rowsPerTxn: 3,
+      dbName: "/torn-truncate.db",
+      seeds: [18],
+      reconstructionsPerPoint: 6,
+      shapeSeed: 0x5ca1ab1e,
+      vfsName: "crash-sweep-torn-truncate",
+    });
+    assert(res.crashPoints > 20, `swept too few crash points: ${res.crashPoints}`);
+    assertEquals(
+      integrityFailures(res.failures).length,
+      0,
+      `a torn-write scramble corrupted a synced committed page (I1) — the truncate boundary-sector faithfulness fix regressed across ${res.reconstructions} reconstructions:\n${
+        fmtFailures(integrityFailures(res.failures))
+      }`,
+    );
+    assertEquals(
+      durabilityFailures(res.failures).length,
+      0,
+      `the VACUUM-bearing property workload lost or phantomed a committed marker (I2):\n${
+        fmtFailures(durabilityFailures(res.failures))
       }`,
     );
   },

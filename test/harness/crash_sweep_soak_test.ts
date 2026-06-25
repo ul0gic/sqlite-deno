@@ -2,7 +2,6 @@ import { assert, assertEquals } from "@std/assert";
 import { PUBLIC_API_DRIVER } from "./workload.ts";
 import { PUBLIC_API_READBACK } from "./verify.ts";
 import {
-  boundaryIntegrityFailures,
   durabilityFailures,
   fmtFailures,
   integrityFailures,
@@ -55,7 +54,7 @@ const slug = (name: string): string => name.replaceAll("/", "-");
 for (const entry of PROPERTY_MATRIX) {
   Deno.test({
     name:
-      `rollback crash soak [${entry.name}]: property workload (hostile rows, UPDATE/DELETE/VACUUM) loses zero committed markers and holds integrity at every sync/dentry crash point`,
+      `rollback crash soak [${entry.name}]: property workload (hostile rows, UPDATE/DELETE/VACUUM) loses zero committed markers and holds integrity at every crash point and reconstruction variant`,
     fn: async () => {
       const res = await runMatrixSweep({
         cell: entry.cell,
@@ -76,10 +75,10 @@ for (const entry of PROPERTY_MATRIX) {
         }`,
       );
       assertEquals(
-        boundaryIntegrityFailures(res.failures).length,
+        integrityFailures(res.failures).length,
         0,
-        `${entry.name} corrupted (I1) at a sync/dentry-boundary reconstruction of the property workload:\n${
-          fmtFailures(boundaryIntegrityFailures(res.failures))
+        `${entry.name} corrupted (I1) at a reconstruction of the property workload:\n${
+          fmtFailures(integrityFailures(res.failures))
         }`,
       );
     },
@@ -88,7 +87,7 @@ for (const entry of PROPERTY_MATRIX) {
 
 Deno.test({
   name:
-    "rollback crash soak [BUG-001 standing proof]: DELETE+EXTRA+dir-sync with ZERO directory durability AND the property workload still loses zero committed markers and holds boundary integrity",
+    "rollback crash soak [BUG-001 standing proof]: DELETE+EXTRA+dir-sync with ZERO directory durability AND the property workload still loses zero committed markers and holds integrity at every variant",
   fn: async () => {
     const res = await runMatrixSweep({
       cell: { journalMode: "DELETE", synchronous: "EXTRA", dirSync: true, dentryDurable: false },
@@ -108,10 +107,10 @@ Deno.test({
       }`,
     );
     assertEquals(
-      boundaryIntegrityFailures(res.failures).length,
+      integrityFailures(res.failures).length,
       0,
-      `BUG-001 standing proof corrupted (I1) at a sync/dentry boundary under the property workload:\n${
-        fmtFailures(boundaryIntegrityFailures(res.failures))
+      `BUG-001 standing proof corrupted (I1) under the property workload:\n${
+        fmtFailures(integrityFailures(res.failures))
       }`,
     );
   },
@@ -119,7 +118,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "rollback crash soak [public surface]: openDatabase default (durability=full) over the property workload loses zero committed markers and holds boundary integrity",
+    "rollback crash soak [public surface]: openDatabase default (durability=full) over the property workload loses zero committed markers and holds integrity at every variant",
   fn: async () => {
     const res = await runMatrixSweep({
       cell: { dirSync: false, dentryDurable: true },
@@ -134,10 +133,10 @@ Deno.test({
       vfsName: "crash-soak-public",
     });
     assertEquals(
-      boundaryIntegrityFailures(res.failures).length,
+      integrityFailures(res.failures).length,
       0,
-      `the shipped public surface corrupted (I1) at a sync/dentry boundary under the property workload:\n${
-        fmtFailures(boundaryIntegrityFailures(res.failures))
+      `the shipped public surface corrupted (I1) under the property workload:\n${
+        fmtFailures(integrityFailures(res.failures))
       }`,
     );
     assertEquals(
