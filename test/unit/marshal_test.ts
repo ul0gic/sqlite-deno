@@ -274,3 +274,22 @@ Deno.test("a ? left unbound by passing no parameters resolves to NULL", async ()
     assertEquals(db.prepare<{ a: number | null }>("SELECT a FROM t").get()?.a, null);
   });
 });
+
+Deno.test("string and null binds use the workarounds for the upstream bind_text/bind_null defects (BUG-003)", async () => {
+  await withDir(async (dir) => {
+    using db = await openDatabase(`${dir}/bug003.db`);
+    db.exec("CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT, n TEXT)");
+    const ins = db.prepare("INSERT INTO t(id, s, n) VALUES (?, ?, ?)");
+    ins.run(1, "round-trip", "present");
+    ins.run(2, "mixed", null);
+    const read = db.prepare<{ s: string | null; n: string | null }>(
+      "SELECT s, n FROM t WHERE id = ?",
+    );
+    assertEquals(read.get(1), { s: "round-trip", n: "present" });
+    assertEquals(read.get(2), { s: "mixed", n: null });
+    const isNull = db.prepare<{ id: number }>("SELECT id FROM t WHERE n IS NULL");
+    assertEquals(isNull.all(), [{ id: 2 }]);
+    const notNull = db.prepare<{ id: number }>("SELECT id FROM t WHERE n IS NOT NULL");
+    assertEquals(notNull.all(), [{ id: 1 }]);
+  });
+});
