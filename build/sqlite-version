@@ -1,0 +1,25 @@
+# Machine-readable pin for the vendored official SQLite wasm (DEC-012).
+# Mirror of the WASM_VENDOR.md pin table; read by build/verify-vendor.ts.
+# Format: KEY=VALUE, one per line, # for comments. No quoting, no spaces around =.
+#
+# A bump to any value here must be matched in src/wasm/ (the committed bytes),
+# in WASM_VENDOR.md, and re-run through the full gate + crash/concurrency/fuzz
+# suite against the new bytes before publish (supply-chain.md).
+
+NPM_PACKAGE=@sqlite.org/sqlite-wasm
+VERSION=3.53.0-build1
+
+# npm dist.shasum of the published tarball — SHA-1 (npm's integrity field is SHA-1).
+TARBALL_SHA1=066cab9189973c39edbb7078c55bb4daa1cd2d30
+
+# Per-file sha256 of the two vendored artifacts (committed in src/wasm/).
+WASM_SHA256=02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312
+MJS_SHA256=f80870f0fa03a39a3338d17ed3fbea04808d344c88e724d90d5f37b9b7b83154
+
+# Paths inside the npm tarball (the `package/` prefix is npm's convention).
+TARBALL_WASM_PATH=package/dist/sqlite3.wasm
+TARBALL_MJS_PATH=package/dist/index.mjs
+
+# The committed copies the tarball bytes must match exactly.
+VENDORED_WASM=src/wasm/sqlite3.wasm
+VENDORED_MJS=src/wasm/sqlite3.mjs

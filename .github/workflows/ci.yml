@@ -42,3 +42,26 @@ jobs:
       # to a GitHub release asset whose sha256 is recorded in tools/biome.sha256.
       - name: Gate
         run: deno task check
+
+  provenance-verify:
+    name: provenance-verify (committed wasm == pinned official release)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
+        with:
+          deno-version: "2.8.1"
+
+      # DEC-012: re-fetch the pinned @sqlite.org/sqlite-wasm tarball, verify its
+      # shasum, and byte-compare to the committed src/wasm/. The transient fetch
+      # is scoped to the npm registry and happens ONLY here — never at install or
+      # runtime. A mismatch fails the job (typed error, non-zero exit).
+      - name: Verify vendored wasm provenance
+        run: deno task verify

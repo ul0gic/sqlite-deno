@@ -24,7 +24,7 @@
     "test:soak:fuzz": "SQLITE_DENO_SOAK=1 deno test -A test/fuzz/fuzz_test.ts test/fuzz/shrink_test.ts --filter SOAK",
     "test:soak:freeform": "SQLITE_DENO_SOAK=1 deno test -A test/harness/freeform_crash_sweep_test.ts",
     "bench": "deno bench -A",
-    "build": "deno run -A build/build.ts"
+    "verify": "deno run --allow-net=registry.npmjs.org --allow-read build/verify-vendor.ts"
   },
   "fmt": {
     "lineWidth": 100,
