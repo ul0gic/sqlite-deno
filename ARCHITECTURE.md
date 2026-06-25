@@ -56,12 +56,12 @@ supply-chain-compromised tomorrow, its blast radius would still be exactly the p
 
 The VFS code splits by responsibility:
 
-| File                   | Responsibility                                                            |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `src/vfs/io.ts`        | `sqlite3_io_methods`: read, write, sync, truncate on an open file handle  |
-| `src/vfs/namespace.ts` | `sqlite3_vfs` namespace ops: open, access, delete, full-pathname          |
-| `src/vfs/lock.ts`      | the whole-file `flock` lock ladder (Mode 1)                               |
-| `src/vfs/guard.ts`     | the canonicalize-then-recheck symlink guard (below)                       |
+| File                   | Responsibility                                                           |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `src/vfs/io.ts`        | `sqlite3_io_methods`: read, write, sync, truncate on an open file handle |
+| `src/vfs/namespace.ts` | `sqlite3_vfs` namespace ops: open, access, delete, full-pathname         |
+| `src/vfs/lock.ts`      | the whole-file `flock` lock ladder (Mode 1)                              |
+| `src/vfs/guard.ts`     | the canonicalize-then-recheck symlink guard (below)                      |
 
 ### VFS dispatch
 
@@ -125,8 +125,8 @@ The VFS closes this in userland. Before any filesystem op, `src/vfs/guard.ts`:
 
 1. **Canonicalizes** the path with `Deno.realPathSync`, resolving symlinked directory components, a
    symlinked final component, and the parent of a path being created.
-2. **Re-checks the canonical target** against Deno's _own_ grant via `Deno.permissions.querySync`,
-   a query, never a request, so it can only ever refuse, never widen your grant.
+2. **Re-checks the canonical target** against Deno's _own_ grant via `Deno.permissions.querySync`, a
+   query, never a request, so it can only ever refuse, never widen your grant.
 
 If the canonical target isn't granted, the op refuses with a typed `SqliteCantOpenError` and **zero
 files are created, read, deleted, or fsynced outside the grant**. This is the canonicalize-then-
@@ -145,8 +145,8 @@ delete, directory-sync).
 
 SQLite drives a five-state lock ladder. Native SQLite implements it with **byte-range** advisory
 locks (`fcntl`) at three independent offsets: `PENDING_BYTE` (`0x40000000`), `RESERVED_BYTE`
-(`0x40000001`), and the shared range. It is precisely those _independent_ ranges that let
-readers coexist: a failed acquisition leaves the prior range's lock intact.
+(`0x40000001`), and the shared range. It is precisely those _independent_ ranges that let readers
+coexist: a failed acquisition leaves the prior range's lock intact.
 
 Deno exposes only **whole-file** `flock` (`FsFile.tryLockSync` / `unlockSync`), not byte-range
 `fcntl`. So v1 collapses the ladder to SQLite's own shipped `unix-flock` protocol ("X-strict"): take
@@ -200,8 +200,8 @@ All lock calls are non-blocking, so there is no OS deadlock; a contending caller
 `SqliteBusyError`. A `busyTimeout` open option (milliseconds) lets SQLite block-and-retry the
 contended lock instead of failing immediately. On POSIX it also covers `openDatabase` itself; on
 Windows, file locks are mandatory rather than advisory, so a peer's lock makes the open-time header
-read fail _before_ the timeout can apply; there a multi-process caller must wrap `openDatabase` in
-a `SqliteBusyError` retry loop.
+read fail _before_ the timeout can apply; there a multi-process caller must wrap `openDatabase` in a
+`SqliteBusyError` retry loop.
 
 ---
 
@@ -248,8 +248,8 @@ sequenceDiagram
 There is **no journal-unlink commit point** in WAL; the commit is the synced commit frame inside the
 `-wal`. On reopen, SQLite runs WAL recovery: it validates the 32-byte `-wal` header (magic, two
 salts), scans the frame headers from offset 32, recomputes the running checksum, and stops at the
-first frame that fails its checksum or salt, recovering to the last valid commit frame. A torn
-final frame fails its checksum and is dropped, leaving the last durably-committed state. The heap
+first frame that fails its checksum or salt, recovering to the last valid commit frame. A torn final
+frame fails its checksum and is dropped, leaving the last durably-committed state. The heap
 wal-index is rebuilt by that same scan; there is no `-shm` to rebuild from.
 
 ---
@@ -294,7 +294,8 @@ control is proven to bite.
 
 **Commit durability is separate from integrity.** Every mode and every durability level stays
 corruption-free across modeled power loss (`integrity_check` is always `ok`). The only thing that
-varies is whether the _latest committed_ transaction survives a power cut, controlled by the `durability` option:
+varies is whether the _latest committed_ transaction survives a power cut, controlled by the
+`durability` option:
 
 | Mode (option)        | Default `durability` | What the default means                                                                                 |
 | -------------------- | -------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -372,5 +373,5 @@ PR to Deno's `ext/io/fs.rs`. With byte-range locking in Deno core:
   intact, eliminating the non-atomic-upgrade hazard entirely.
 - **WAL becomes multi-process** via real shared-memory methods over an mmap'd `-shm`.
 
-The byte-range `fcntl` work is itself an on-mission contribution to the Deno ecosystem; help on
-that front is very welcome.
+The byte-range `fcntl` work is itself an on-mission contribution to the Deno ecosystem; help on that
+front is very welcome.

@@ -19,9 +19,9 @@ Deno's permission model fully intact (no FFI, no network, no ambient filesystem)
 everywhere Deno runs, including Deno Deploy and the edge.
 
 The README has the full story, the honest limitations, and the comparison with the alternatives;
-[ARCHITECTURE.md](./ARCHITECTURE.md) has the engineering depth (the VFS, the lock ladder, the
-WAL flow, and the crash/durability model). The public `Database` / `Statement` API has landed
-(v0.1.0) and is proven against the full crash/concurrency/fuzz suite; the
+[ARCHITECTURE.md](./ARCHITECTURE.md) has the engineering depth (the VFS, the lock ladder, the WAL
+flow, and the crash/durability model). The public `Database` / `Statement` API has landed (v0.1.0)
+and is proven against the full crash/concurrency/fuzz suite; the
 [capability envelope](./README.md#the-capability-envelope-the-honest-asterisks) states the honest
 limitations plainly.
 
@@ -60,9 +60,9 @@ work.
   an FFI boundary: never throw across it into C, always free what you allocate.
 - **`src/wasm/`**: the vendored official `@sqlite.org/sqlite-wasm` build (pinned, committed
   in-package).
-- **`test/`**: mirrors `src/`. The crash and concurrency harnesses under **`test/harness/`** are
-  the most important code in the repo; everything we claim about durability and concurrency is
-  proven there.
+- **`test/`**: mirrors `src/`. The crash and concurrency harnesses under **`test/harness/`** are the
+  most important code in the repo; everything we claim about durability and concurrency is proven
+  there.
 
 ### Running a single suite
 
@@ -147,9 +147,9 @@ documentation bug worth filing.
    zero suppressions. CI runs the same gate.
 3. **Match the code around you.** The project is functional-by-default TypeScript with a strict
    compiler. Let `deno fmt` handle formatting; do not reformat to taste.
-4. **Explain the why.** Commit messages and the PR description should say _why_ the change is needed;
-   the diff already shows what. If a change fixes a corruption or durability hazard, describe the
-   hazard and point at the test that now guards against it.
+4. **Explain the why.** Commit messages and the PR description should say _why_ the change is
+   needed; the diff already shows what. If a change fixes a corruption or durability hazard,
+   describe the hazard and point at the test that now guards against it.
 5. **Add or update tests.** New behavior comes with tests; a durability/concurrency change comes
    with a harness proof and its negative control. A bug fix comes with a regression test.
 6. **Keep PRs focused.** One logical change per PR is easier to review and easier to trust.
@@ -166,8 +166,8 @@ the project is going and where contributions land most usefully. A few standing 
 
 - **More crash and concurrency proofs**: broader workloads, more seeds, more hostile inputs.
 - **Documentation**: clarity fixes, examples, and explaining anything that tripped you up.
-- **Platform coverage**: durability behavior is verified on Linux; macOS and Windows verification
-  is genuinely open work.
+- **Platform coverage**: durability behavior is verified on Linux; macOS and Windows verification is
+  genuinely open work.
 - **The v2 direction**: multi-process WAL depends on byte-range `fcntl` locking and `mmap` landing
   in Deno core. If you are interested in upstream Deno runtime work, that is a high-leverage place
   to help.

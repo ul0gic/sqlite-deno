@@ -43,6 +43,8 @@ jobs:
           languages: ${{ matrix.language }}
           # security-extended adds higher-signal security queries beyond the default set.
           queries: security-extended
+          # Exclude vendored third-party wasm glue from analysis.
+          config-file: .github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
