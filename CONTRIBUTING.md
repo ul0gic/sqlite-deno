@@ -1,7 +1,7 @@
 # Contributing to sqlite-deno
 
 Thanks for being here. This is a build-in-public project, and contributions of every kind are
-welcome — code, bug reports, questions, documentation, test cases, and code review all genuinely
+welcome: code, bug reports, questions, documentation, test cases, and code review all genuinely
 help. You do not need to be a SQLite internals expert or a Deno core contributor to be useful; some
 of the most valuable contributions are a clear bug report, a doc fix, or a new test that catches
 something we missed.
@@ -18,8 +18,8 @@ pure-TypeScript VFS that maps SQLite's file I/O onto Deno's filesystem API. The 
 Deno's permission model fully intact (no FFI, no network, no ambient filesystem) and to run
 everywhere Deno runs, including Deno Deploy and the edge.
 
-The README has the full story, the honest limitations, and the comparison with the alternatives —
-and [ARCHITECTURE.md](./ARCHITECTURE.md) has the engineering depth (the VFS, the lock ladder, the
+The README has the full story, the honest limitations, and the comparison with the alternatives;
+[ARCHITECTURE.md](./ARCHITECTURE.md) has the engineering depth (the VFS, the lock ladder, the
 WAL flow, and the crash/durability model). The public `Database` / `Statement` API has landed
 (v0.1.0) and is proven against the full crash/concurrency/fuzz suite; the
 [capability envelope](./README.md#the-capability-envelope-the-honest-asterisks) states the honest
@@ -33,7 +33,7 @@ limitations plainly.
 # 1. Clone and enter
 git clone https://github.com/ul0gic/sqlite-deno && cd sqlite-deno
 
-# 2. Run the gate — this is also the fastest way to confirm your setup works
+# 2. Run the gate; this is also the fastest way to confirm your setup works
 deno task check
 ```
 
@@ -42,8 +42,8 @@ deno task check
 | Step                   | What it checks                                                     |
 | ---------------------- | ------------------------------------------------------------------ |
 | `deno fmt --check`     | formatting (never hand-format; `deno fmt` owns it)                 |
-| `deno lint`            | lint rules — zero warnings, zero suppressions                      |
-| `deno check`           | TypeScript types — zero errors                                     |
+| `deno lint`            | lint rules: zero warnings, zero suppressions                       |
+| `deno check`           | TypeScript types: zero errors                                      |
 | `deno task lint:biome` | type-aware lint via a pinned, checksum-verified Biome (dev only)   |
 | `deno test`            | the full test suite, including the crash and concurrency harnesses |
 
@@ -52,15 +52,15 @@ work.
 
 ### Where things live
 
-- **`src/vfs/`** — the Deno-filesystem VFS, in pure TypeScript. This is the heart of the project:
+- **`src/vfs/`**: the Deno-filesystem VFS, in pure TypeScript. This is the heart of the project:
   `io.ts` (read/write/sync/truncate), `namespace.ts` (open/access/delete/path resolution), `lock.ts`
   (the whole-file `flock` lock ladder), and `deno.ts` (`installDenoVfs`, which registers the VFS
   against the wasm).
-- **`src/glue.ts`** — the JS↔WASM boundary. Marshals values and owns linear memory. Treat this like
+- **`src/glue.ts`**: the JS↔WASM boundary. Marshals values and owns linear memory. Treat this like
   an FFI boundary: never throw across it into C, always free what you allocate.
-- **`src/wasm/`** — the vendored official `@sqlite.org/sqlite-wasm` build (pinned, committed
+- **`src/wasm/`**: the vendored official `@sqlite.org/sqlite-wasm` build (pinned, committed
   in-package).
-- **`test/`** — mirrors `src/`. The crash and concurrency harnesses under **`test/harness/`** are
+- **`test/`**: mirrors `src/`. The crash and concurrency harnesses under **`test/harness/`** are
   the most important code in the repo; everything we claim about durability and concurrency is
   proven there.
 
@@ -80,7 +80,7 @@ SQLITE_DENO_SOAK=1 deno task test:soak:wal
 ```
 
 A suite that needs only `--allow-read=./test.db` is itself evidence of the package's small
-permission footprint — that is by design, so please keep new tests scoped to the minimum they need.
+permission footprint; that is by design, so please keep new tests scoped to the minimum they need.
 
 ---
 
@@ -92,14 +92,14 @@ get a change over the line.
 
 ### 1. A database must not silently lose your data
 
-**No concurrency or durability mode is exposed until its crash/concurrency harness is green —
+**No concurrency or durability mode is exposed until its crash/concurrency harness is green,
 including a negative control.** The negative control is the part that matters: a harness that only
 ever passes proves nothing, so each one includes a deliberately broken variant (for example, a lying
 no-op `xSync`) and we require the harness to _catch_ it. A mode that cannot be proven this way stays
 single-process-only or stays unshipped, rather than shipping with "it mostly works."
 
 If you are adding behavior that touches durability or cross-process locking, the most welcome
-contribution is **a proof in `test/harness/` to go with it** — including the negative control that
+contribution is **a proof in `test/harness/` to go with it**, including the negative control that
 shows the proof has teeth. If you are not sure how to structure that, open an issue or a draft PR
 and we will help. Adding coverage to the harness is one of the highest-value things anyone can do
 here.
@@ -115,7 +115,7 @@ code path may acquire a permission the caller did not pass in. Concretely:
   handle; it never reaches for ambient access.
 - No `Deno.permissions.request`.
 
-If a change seems to need a broader grant, that is usually a signal to rethink the boundary — and a
+If a change seems to need a broader grant, that is usually a signal to rethink the boundary, and a
 good thing to raise in an issue before writing much code.
 
 ---
@@ -124,10 +124,10 @@ good thing to raise in an issue before writing much code.
 
 Good issues make the project better even when no code is attached. A useful bug report includes:
 
-- **What you did** — ideally the smallest snippet or command that reproduces it.
-- **What you expected** and **what happened** — including the exact error or result code if there is
+- **What you did**: ideally the smallest snippet or command that reproduces it.
+- **What you expected** and **what happened**, including the exact error or result code if there is
   one.
-- **Environment** — Deno version (`deno --version`), OS and filesystem if it is durability- or
+- **Environment**: Deno version (`deno --version`), OS and filesystem if it is durability- or
   locking-related (ext4, APFS, NFS, etc.), and the permission flags you ran with.
 
 For a feature idea or design question, just describe the problem you are trying to solve. Pointing
@@ -147,14 +147,14 @@ documentation bug worth filing.
    zero suppressions. CI runs the same gate.
 3. **Match the code around you.** The project is functional-by-default TypeScript with a strict
    compiler. Let `deno fmt` handle formatting; do not reformat to taste.
-4. **Explain the why.** Commit messages and the PR description should say _why_ the change is needed
-   — the diff already shows what. If a change fixes a corruption or durability hazard, describe the
+4. **Explain the why.** Commit messages and the PR description should say _why_ the change is needed;
+   the diff already shows what. If a change fixes a corruption or durability hazard, describe the
    hazard and point at the test that now guards against it.
 5. **Add or update tests.** New behavior comes with tests; a durability/concurrency change comes
    with a harness proof and its negative control. A bug fix comes with a regression test.
 6. **Keep PRs focused.** One logical change per PR is easier to review and easier to trust.
 
-Do not worry about getting everything perfect on the first try — that is what review is for. A draft
+Do not worry about getting everything perfect on the first try; that is what review is for. A draft
 PR with a clear question is a great way to start.
 
 ---
@@ -164,11 +164,11 @@ PR with a clear question is a great way to start.
 The [roadmap in the README](./README.md#roadmap) and the issue tracker are the best maps of where
 the project is going and where contributions land most usefully. A few standing areas:
 
-- **More crash and concurrency proofs** — broader workloads, more seeds, more hostile inputs.
-- **Documentation** — clarity fixes, examples, and explaining anything that tripped you up.
-- **Platform coverage** — durability behavior is verified on Linux; macOS and Windows verification
+- **More crash and concurrency proofs**: broader workloads, more seeds, more hostile inputs.
+- **Documentation**: clarity fixes, examples, and explaining anything that tripped you up.
+- **Platform coverage**: durability behavior is verified on Linux; macOS and Windows verification
   is genuinely open work.
-- **The v2 direction** — multi-process WAL depends on byte-range `fcntl` locking and `mmap` landing
+- **The v2 direction**: multi-process WAL depends on byte-range `fcntl` locking and `mmap` landing
   in Deno core. If you are interested in upstream Deno runtime work, that is a high-leverage place
   to help.
 

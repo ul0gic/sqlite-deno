@@ -1,36 +1,35 @@
 # sqlite-deno
 
-> **A true-Deno SQLite, WASM-based, with zero compromises to Deno's permission model.** No FFI, no
-> network, no native modules, no runtime downloads. One artifact runs everywhere Deno runs,
-> including Deno Deploy and the edge.
+[![JSR](https://jsr.io/badges/@ul0gic/sqlite-deno)](https://jsr.io/@ul0gic/sqlite-deno)
+[![JSR Score](https://jsr.io/badges/@ul0gic/sqlite-deno/score)](https://jsr.io/@ul0gic/sqlite-deno)
+[![CI](https://github.com/ul0gic/sqlite-deno/actions/workflows/ci.yml/badge.svg)](https://github.com/ul0gic/sqlite-deno/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ul0gic/sqlite-deno/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ul0gic/sqlite-deno)
 
-`sqlite-deno` runs the SQLite team's official WebAssembly build behind a pure-TypeScript VFS that
-maps SQLite's file I/O onto Deno's filesystem API. The point is a SQLite that stays inside Deno's
-permission model — `--allow-read=./db.sqlite` is the read grant, no `--allow-ffi`, no escape hatch —
-while still offering WAL and crash-recovery, and shipping the exact official wasm you can verify
-byte-for-byte.
+> **SQLite for Deno that keeps your permission model intact.** `--allow-read=./db.sqlite` is the
+> whole grant: no FFI, no native modules, no runtime downloads. Runs everywhere Deno runs, including
+> Deno Deploy.
 
-There are already several good SQLite options for Deno, each a sensible choice for a different
-problem (see [which to choose](#choosing-a-sqlite-for-deno)). The combination none offers in one
-package is **permission-respecting, WAL-capable, and able to run everywhere Deno runs** — the gap
-this fills. It is not trying to replace anything that already works.
-
-> **Status: v0.1.0 — Phases 1–9 complete.** The public API has landed and is proven against the full
-> L1–L5 crash/concurrency/fuzz suite; the shipped wasm is the official artifact, provenance-verified
-> byte-for-byte. The honest limitations are stated plainly in
-> [the capability envelope](#the-capability-envelope-the-honest-asterisks) — please read it before
-> you commit to the package. Multi-process WAL is [v2](#roadmap).
+The official SQLite WebAssembly build behind a pure-TypeScript VFS, with WAL and crash recovery, and
+the exact official wasm you can verify byte-for-byte. WAL is single-process in v1; the honest limits
+are in [the capability envelope](#the-capability-envelope-the-honest-asterisks).
 
 ---
 
 ## Quickstart
 
+Install:
+
+```bash
+deno add jsr:@ul0gic/sqlite-deno
+```
+
 ```typescript
 // quickstart.ts
 import { openDatabase } from "@ul0gic/sqlite-deno";
 
-// `using` disposes the database at scope end: open statements are finalized,
-// the file handle is closed. Default mode is rollback, durable-by-default.
+// `using` disposes the database at scope end: open statements are finalized
+// and the file handle closed. Default mode is rollback, durable by default.
 using db = await openDatabase("./app.db");
 
 db.exec(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);`);
@@ -44,72 +43,48 @@ interface User {
   name: string;
 }
 using byName = db.prepare<User>("SELECT id, name FROM users WHERE name = ?");
-const ada = byName.get("Ada"); // User | undefined — inferred, no cast
+const ada = byName.get("Ada"); // User | undefined, inferred (no cast)
 console.log(ada); // { id: 1, name: "Ada" }
 ```
 
+Run it:
+
 ```bash
-# durable writes need the directory, not just the file (see the durability caveat below)
+# durable writes need the directory, not just the file (see the permission story below)
 deno run --allow-read=. --allow-write=. quickstart.ts
 # { id: 1, name: "Ada" }
 ```
 
-That is the whole grant: no `--allow-ffi`, no `--allow-net`, no `--allow-env`. Install via JSR:
+That is the whole grant: no `--allow-ffi`, no `--allow-net`, no `--allow-env`.
 
-```bash
-deno add jsr:@ul0gic/sqlite-deno
-```
-
-For deeper coverage of the VFS, the lock ladder, the WAL flow, and the crash/durability model, see
+For the VFS, the lock ladder, the WAL flow, and the crash/durability model, see
 [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
 ## The permission story
 
-This is the part the project cares most about getting right. The wasm has **no ambient authority**.
-All of SQLite's I/O flows back out through our VFS callbacks, and those reach the filesystem only
-through path-scoped `Deno.*Sync` calls. The module cannot open a file the host did not hand it. If
-this package were supply-chain-compromised tomorrow, its blast radius would still be **exactly** the
-paths you granted — no FFI to abuse, no network to phone home, no ambient filesystem.
+The wasm has **no ambient authority.** All of SQLite's I/O flows out through the VFS callbacks,
+which reach the filesystem only through path-scoped `Deno.*Sync` calls, so the module cannot open a
+file you did not grant. Supply-chain-compromise the package tomorrow and its blast radius is still
+**exactly the paths you granted:** no FFI to abuse, no network to phone home, no ambient filesystem.
 
 ```bash
-# read access to the directory holding the database - nothing wider
-deno run --allow-read=./data your_program.ts
+deno run --allow-read=./data app.ts                       # read-only
+deno run --allow-read=./data --allow-write=./data app.ts  # durable writes
 ```
 
-The grant is scoped to the database's **parent directory**, not the file alone, because the VFS
-canonicalizes paths before touching them (the symlink guard below) and a crash-safe commit fsyncs
-the directory — both of which read the directory path. A file-only grant still works for the
-plainest read path but **fails closed with a typed error** the moment it must canonicalize or
-directory-fsync; it never silently downgrades and never widens what you granted.
-
-### The durability caveat (read this)
-
-The headline "`--allow-read=./app.db` is the entire grant" is true for **reading**. It is **not**
-the whole story for **durable writes**: a crash-safe commit requires SQLite to `fsync` the
-**directory** containing the database (so a journal's deletion or a file's creation survives a power
-cut), and opening a directory handle to fsync it is a _read of the directory path_, which a
-file-only grant does not cover. So durable operation needs a read **and** write grant on the
-**parent directory**:
-
-```bash
-# durable writes: grant the directory, not just the file
-deno run --allow-read=./data --allow-write=./data your_program.ts
-```
-
-Under a file-only grant the package still works and fails closed — it surfaces a typed error, never
-a silent durability downgrade.
-
-### The symlink guard
-
-Deno's permission check is **lexical** — it checks the path you pass, not the canonical target — so
-a symlink _inside_ your grant pointing _outside_ it is followed by Deno. The VFS closes this in
-userland: before any filesystem op it canonicalizes the path and re-checks the **canonical** target
-against Deno's own grant via `Deno.permissions.querySync` (a query, never a request — it can only
-refuse, never widen). An out-of-grant target refuses with a typed `SqliteCantOpenError`, zero files
-touched outside the grant. The mechanism and the one residual TOCTOU window (Low, closed by the v2
-byte-range work) are in [ARCHITECTURE.md](./ARCHITECTURE.md#the-symlink-escape-guard-dec-011).
+- **Grant the parent directory, not just the file.** Canonicalizing paths and `fsync`ing the
+  directory on a crash-safe commit both read the directory path, so `./app.db` alone is not enough
+  for durable writes.
+- **A file-only grant fails closed, never silently.** It works for plain reads, but the moment it
+  must canonicalize or directory-fsync it surfaces a typed error. It never downgrades durability
+  quietly or widens what you granted.
+- **Symlinks cannot escape.** Deno's permission check is lexical, so a link inside your grant aimed
+  outside would be followed. The VFS canonicalizes and re-checks the real target against your grant
+  (`Deno.permissions.querySync`, a query that can only refuse), rejecting an out-of-grant target
+  with a typed `SqliteCantOpenError`. Mechanism and the one residual TOCTOU window (Low, closed by
+  v2): [ARCHITECTURE.md](./ARCHITECTURE.md#the-symlink-escape-guard-dec-011).
 
 ---
 
@@ -121,37 +96,35 @@ case, that is genuinely useful to know early. The full engineering reasoning is 
 
 ### Mode 1 (rollback, default), multi-process: **serialized**
 
-One accessor at a time. **No concurrent readers** — a reader excludes other readers _and_ writers
-for as long as it holds the file.
+One accessor at a time. **No concurrent readers:** a reader excludes other readers and writers while
+it holds the file.
 
-**Why:** Deno's userland exposes only whole-file `flock`, not byte-range `fcntl`. The "many readers
-XOR one writer" design is verified-unsafe on whole-file `flock` (a failed `LOCK_SH → LOCK_EX`
-upgrade silently drops the shared lock, and SQLite's stale-cache revalidation doesn't fire on the
-retry path — a rare silent-corruption window). So v1 ships SQLite's own `unix-flock` protocol,
-provably correct by construction, at the cost of serialization. True concurrent readers need
-byte-range `fcntl` and are [v2](#roadmap).
+**Why:** Deno's userland exposes only whole-file `flock`, not byte-range `fcntl`, and the "many
+readers XOR one writer" design is verified-unsafe on whole-file `flock` (a failed
+`LOCK_SH → LOCK_EX` upgrade silently drops the shared lock). So v1 ships SQLite's own `unix-flock`
+protocol: provably correct by construction, at the cost of serialization. True concurrent readers
+need byte-range `fcntl`, which is [v2](#roadmap).
 
-A contending caller gets a `SqliteBusyError`. A `busyTimeout` open option (ms) lets SQLite
-block-and-retry instead; it covers `openDatabase` on POSIX, but on Windows (mandatory locks) a
-multi-process caller must wrap `openDatabase` in a `SqliteBusyError` retry loop. A non-zero timeout
-is not a guarantee, so keep a caller-side retry loop as the backstop.
+A contending caller gets a `SqliteBusyError`. The `busyTimeout` open option (ms) makes SQLite
+block-and-retry on POSIX; on Windows (mandatory locks) wrap `openDatabase` in a `SqliteBusyError`
+retry loop. A timeout is not a guarantee, so keep your own retry loop as the backstop.
 
 ### Mode 2 (WAL): **single-process exclusive only**
 
 Real WAL, with the wal-index in heap. **No `-shm` file, no shared-memory methods.** One process owns
 the file exclusively.
 
-**Why:** multi-process WAL needs a memory-mapped `-shm` wal-index _and_ byte-range `fcntl`, neither
-available from Deno userland today. Exclusive-locking mode runs WAL with the index in heap, needing
-only the whole-file exclusive lock Deno already has — exactly what the official `sqlite-wasm` does,
-and it covers the dominant Deno shape: one long-running server owning its database. Multi-process
-WAL is [v2](#roadmap). Setting `journal_mode=WAL` without `locking_mode=EXCLUSIVE` first **fails
-closed** (SQLite returns `"delete"`: no WAL, no crash, no corruption).
+**Why:** multi-process WAL needs a memory-mapped `-shm` wal-index and byte-range `fcntl`, neither
+available from Deno userland today. Exclusive-locking mode keeps the index in heap and needs only
+the whole-file exclusive lock Deno already has, which is exactly what the official `sqlite-wasm`
+does. It covers the dominant Deno shape: one long-running server owning its database. Setting
+`journal_mode=WAL` without `locking_mode=EXCLUSIVE` first **fails closed** (SQLite returns
+`"delete"`: no WAL, no crash, no corruption). Multi-process WAL is [v2](#roadmap).
 
 ### Durability
 
-**Commit durability is separate from integrity.** Every mode and every durability level stays
-corruption-free across modeled power loss — `PRAGMA integrity_check` is always `ok`. What varies is
+**Commit durability is separate from integrity.** Every mode and durability level stays
+corruption-free across modeled power loss (`PRAGMA integrity_check` is always `ok`). What varies is
 whether the _latest committed_ transaction survives a power cut, set by the `durability` option:
 
 | Mode (option)        | Default `durability` | What the default means                                                                                |
@@ -159,15 +132,15 @@ whether the _latest committed_ transaction survives a power cut, set by the `dur
 | `rollback` (default) | `"full"`             | Durable-by-default: the last committed txn survives modeled power loss. `synchronous=FULL`.           |
 | `wal`                | `"normal"`           | SQLite-recommended WAL default: consistency-safe, but the last commit(s) may roll back on power loss. |
 
-- Pass `{ durability: "normal" }` on rollback for a faster opt-in (one fewer sync per commit); it
-  stays consistency-safe but the latest commit can be lost on a power cut. Pass
-  `{ mode: "wal", durability: "full" }` for power-loss durability in WAL. WAL at the default
-  `synchronous=NORMAL` is documented SQLite behavior, not a corruption bug — a `COMMIT` can roll
-  back after a power cut (it survives an _application_ crash, just not a _power_ loss).
+- Pass `{ durability: "normal" }` on rollback for one fewer sync per commit: still consistency-safe,
+  but the latest commit can be lost on a power cut. Pass `{ mode: "wal", durability: "full" }` for
+  power-loss durability in WAL. WAL at the default `synchronous=NORMAL` is documented SQLite
+  behavior, not a corruption bug: a `COMMIT` can roll back after a power cut (it survives an
+  _application_ crash, just not a _power_ loss).
 - **Durability is verified on Linux only.** Directory-fsync durability is crash-proven on Linux for
   both modes. Windows fsync semantics are unverified (the directory fsync is a documented no-op
   there, mirroring SQLite's `os_win.c`); NFS and other networked filesystems are unsupported, as in
-  native SQLite. The crash proofs are model-bounded — a worst-legal-device power-loss model plus
+  native SQLite. The crash proofs are model-bounded: a worst-legal-device power-loss model plus
   `strace`-verified primitives, not real-hardware power-cut testing.
 
 ---
@@ -175,7 +148,7 @@ whether the _latest committed_ transaction survives a power cut, set by the `dur
 ## Verify the artifact yourself
 
 The shipped wasm is the SQLite team's official `@sqlite.org/sqlite-wasm` build, vendored in-package
-and pinned to an exact version. You do not have to take that on faith — one command transiently
+and pinned to an exact version. You do not have to take that on faith. One command transiently
 re-fetches the pinned official tarball, checks its shasum, and byte-compares it to the committed
 bytes:
 
@@ -193,8 +166,8 @@ world already runs, not to our toolchain being honest. The pin and the reasoning
 
 ## What's proven, and how to check it
 
-The correctness claims are meant to be executable, and they run on the vendored wasm, the real VFS,
-and the shipped public API — never a stubbed SQLite. From a clean checkout:
+The correctness claims are executable. They run on the vendored wasm, the real VFS, and the shipped
+public API, never a stubbed SQLite. From a clean checkout:
 
 ```bash
 deno task check        # fmt, lint, type-check, type-aware lint, and the full test suite
@@ -215,7 +188,7 @@ and Mode 2 WAL crash recovery (torn-tail and crash-during-checkpoint). The metho
 Several good options exist, and for many projects one of them is the better fit. An honest signpost:
 
 - **Need maximum write throughput, and `--allow-ffi` is acceptable?** Reach for
-  [`@db/sqlite`](https://jsr.io/@db/sqlite) (native, via FFI) — the fastest option.
+  [`@db/sqlite`](https://jsr.io/@db/sqlite) (native, via FFI). It's the fastest option.
 - **Happy on Deno's built-in, native engine?** `node:sqlite` ships with Deno and needs no
   dependency.
 - **Want the smallest WASM footprint for simple, single-process use?**
@@ -225,10 +198,10 @@ Several good options exist, and for many projects one of them is the better fit.
   [`@sqlite.org/sqlite-wasm`](https://sqlite.org/wasm/) is built for exactly that.
 
 `sqlite-deno` fills one gap none of those cover together: SQLite that **keeps Deno's permission
-model fully intact (no FFI), offers WAL, and runs everywhere Deno runs** — including Deno Deploy and
-the edge — with the official wasm shipped in-package and verifiable byte-for-byte. If that
-combination is what you need, this is for you. If it isn't, one of the above probably serves you
-better — and that is a good outcome.
+model fully intact (no FFI), offers WAL, and runs everywhere Deno runs** (including Deno Deploy and
+the edge), with the official wasm shipped in-package and verifiable byte-for-byte. If that
+combination is what you need, this is for you. If not, one of the above probably serves you better,
+and that is a good outcome.
 
 ---
 
@@ -237,22 +210,22 @@ better — and that is a good outcome.
 **v1 (current).** Public API, both concurrency modes, crash/durability proofs on Linux, and the
 provenance-verified official wasm are all done. Mode selection is constrained at open so a caller
 cannot accidentally leave the tested envelope (`{ readonly: true, mode: "wal" }` is rejected). No
-user-defined SQL functions in v1 — that JS-callback-reentrancy surface waits until its reentrancy
+user-defined SQL functions in v1: that JS-callback-reentrancy surface waits until its reentrancy
 model is tested.
 
-**v2 — multi-process WAL.** Gated on contributing byte-range `fcntl(F_OFD_SETLK)` locking (and
-`mmap` for a real `-shm`) to Deno core. With those, Mode 1 gains the faithful three-byte-range
-ladder (true concurrent readers) and WAL goes multi-process. The hope is that this turns into a
-focused, useful contribution upstream to Deno itself — help on that front is very welcome.
+**v2: multi-process WAL.** Gated on contributing byte-range `fcntl(F_OFD_SETLK)` locking (and `mmap`
+for a real `-shm`) to Deno core. With those, Mode 1 gains the faithful three-byte-range ladder (true
+concurrent readers) and WAL goes multi-process. The hope is a focused, useful contribution upstream
+to Deno itself; help on that front is very welcome.
 
 ---
 
 ## Contributing
 
-Contributions, issues, questions, and code review are all genuinely welcome — this is built in
-public partly so others can poke at it. Whether you want to fix a bug, add a proof to the harness,
-improve the docs, or ask how something works, please jump in. **See
-[CONTRIBUTING.md](./CONTRIBUTING.md)** for the full guide. The gate every change keeps green:
+Contributions, issues, questions, and code review are all genuinely welcome; this is built in public
+partly so others can poke at it. Whether you want to fix a bug, add a proof to the harness, improve
+the docs, or ask how something works, please jump in. **See [CONTRIBUTING.md](./CONTRIBUTING.md)**
+for the full guide. The gate every change keeps green:
 
 ```bash
 deno task check         # fmt --check, lint, type-check, type-aware lint, test
@@ -260,7 +233,7 @@ deno task test:soak     # Mode 1 multi-process soak (SQLITE_DENO_SOAK=1, CPU-ove
 deno task test:soak:wal # Mode 2 WAL crash-sweep soak
 ```
 
-Two principles guide the project — they exist to keep it trustworthy, not to gatekeep:
+Two principles guide the project; they exist to keep it trustworthy, not to gatekeep:
 
 - **A database must not lose your data.** No concurrency or durability mode is exposed until its
   crash/concurrency harness is green, including a negative control that proves the harness can catch

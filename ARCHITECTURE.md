@@ -36,11 +36,11 @@ published; this document is the public home for what they decided and why.
 Three facts shape everything:
 
 - **No recompile.** We register a pure-TypeScript VFS against the _prebuilt_ official wasm via
-  `installVfs` — the same mechanism SQLite's own browser OPFS VFS uses. v1 carries no C toolchain.
+  `installVfs`, the same mechanism SQLite's own browser OPFS VFS uses. v1 carries no C toolchain.
 - **The VFS is simpler than the browser's.** OPFS is asynchronous but SQLite's VFS contract is
   synchronous, so the browser VFS needs a `SharedArrayBuffer` + `Atomics.wait` async-proxy dance to
   bridge them. Deno's file API is already synchronous (`openSync`, `readSync`, `writeSync`,
-  `tryLockSync`), so our VFS calls Deno I/O directly — no `SharedArrayBuffer`, no `Atomics`, no
+  `tryLockSync`), so our VFS calls Deno I/O directly: no `SharedArrayBuffer`, no `Atomics`, no
   proxy.
 - **Runs everywhere Deno runs**, including Deno Deploy and the edge, by construction. One wasm,
   every target, no native binaries to build, sign, and re-download.
@@ -58,8 +58,8 @@ The VFS code splits by responsibility:
 
 | File                   | Responsibility                                                            |
 | ---------------------- | ------------------------------------------------------------------------- |
-| `src/vfs/io.ts`        | `sqlite3_io_methods` — read, write, sync, truncate on an open file handle |
-| `src/vfs/namespace.ts` | `sqlite3_vfs` namespace ops — open, access, delete, full-pathname         |
+| `src/vfs/io.ts`        | `sqlite3_io_methods`: read, write, sync, truncate on an open file handle  |
+| `src/vfs/namespace.ts` | `sqlite3_vfs` namespace ops: open, access, delete, full-pathname          |
 | `src/vfs/lock.ts`      | the whole-file `flock` lock ladder (Mode 1)                               |
 | `src/vfs/guard.ts`     | the canonicalize-then-recheck symlink guard (below)                       |
 
@@ -106,18 +106,18 @@ as a bug, never an error path.
 
 A few VFS-contract choices are load-bearing for the durability model:
 
-- **`xSectorSize` returns 4096**, and `xDeviceCharacteristics` returns **0** — no IOCAP bits (no
+- **`xSectorSize` returns 4096**, and `xDeviceCharacteristics` returns **0**: no IOCAP bits (no
   `POWERSAFE_OVERWRITE`, no atomic-write, no safe-append). This forces SQLite onto its most
   conservative journaling path, which is the honest default for a general filesystem.
 - **`xSync` issues a real fsync** (`syncSync`) or fdatasync (`syncDataSync`, selected by the
-  `SQLITE_SYNC_DATAONLY` flag). A sync failure returns `SQLITE_IOERR_FSYNC` — it never reports
+  `SQLITE_SYNC_DATAONLY` flag). A sync failure returns `SQLITE_IOERR_FSYNC`; it never reports
   success it did not achieve.
 - **`xAccess(EXISTS)` is fail-closed:** only `Deno.errors.NotFound` maps to "absent"; any other stat
   failure returns an I/O error rather than fabricating a "no" that could mask a hot journal.
 
 ### The symlink-escape guard (DEC-011)
 
-Deno's permission check is **lexical** — it checks the path you pass, not the canonical target. So a
+Deno's permission check is **lexical**: it checks the path you pass, not the canonical target. So a
 symlink that lives _inside_ your grant but points _outside_ it is followed by Deno (verified on Deno
 2.8.1, Linux), and naïvely that would let I/O land outside the granted prefix.
 
@@ -125,7 +125,7 @@ The VFS closes this in userland. Before any filesystem op, `src/vfs/guard.ts`:
 
 1. **Canonicalizes** the path with `Deno.realPathSync`, resolving symlinked directory components, a
    symlinked final component, and the parent of a path being created.
-2. **Re-checks the canonical target** against Deno's _own_ grant via `Deno.permissions.querySync` —
+2. **Re-checks the canonical target** against Deno's _own_ grant via `Deno.permissions.querySync`,
    a query, never a request, so it can only ever refuse, never widen your grant.
 
 If the canonical target isn't granted, the op refuses with a typed `SqliteCantOpenError` and **zero
@@ -134,18 +134,18 @@ recheck that Deno itself omits, applied uniformly to all four filesystem doors (
 delete, directory-sync).
 
 > **One residual (honest):** a TOCTOU window exists between canonicalizing the path and opening it.
-> Exploiting it requires an attacker who already holds write access _into_ the granted directory —
-> who can therefore already corrupt the database directly — and it cannot reach outside the grant in
+> Exploiting it requires an attacker who already holds write access _into_ the granted directory,
+> who can therefore already corrupt the database directly, and it cannot reach outside the grant in
 > any way that in-grant write access can't already. Tracked as `SEC-002` (Low). The complete fix is
 > upstream Deno doing the canonicalize-before-check itself; the v2 byte-range work closes it.
 
 ---
 
-## Mode 1 — rollback journal, whole-file locks (DEC-009)
+## Mode 1: rollback journal, whole-file locks (DEC-009)
 
 SQLite drives a five-state lock ladder. Native SQLite implements it with **byte-range** advisory
-locks (`fcntl`) at three independent offsets — `PENDING_BYTE` (`0x40000000`), `RESERVED_BYTE`
-(`0x40000001`), and the shared range — and it is precisely those _independent_ ranges that let
+locks (`fcntl`) at three independent offsets: `PENDING_BYTE` (`0x40000000`), `RESERVED_BYTE`
+(`0x40000001`), and the shared range. It is precisely those _independent_ ranges that let
 readers coexist: a failed acquisition leaves the prior range's lock intact.
 
 Deno exposes only **whole-file** `flock` (`FsFile.tryLockSync` / `unlockSync`), not byte-range
@@ -179,8 +179,8 @@ stateDiagram-v2
 
 ### Why not "many readers XOR one writer"
 
-The obvious concurrent-reader design — a shared `LOCK_SH` for readers, upgraded to `LOCK_EX` for a
-writer — is **verified-unsafe** on whole-file `flock`, for two compounding reasons:
+The obvious concurrent-reader design (a shared `LOCK_SH` for readers, upgraded to `LOCK_EX` for a
+writer) is **verified-unsafe** on whole-file `flock`, for two compounding reasons:
 
 - **The flock upgrade is non-atomic.** On Linux, a _failed_ `LOCK_SH → LOCK_EX` upgrade _drops_ the
   shared lock while returning failure (the kernel deletes the existing lock before testing for
@@ -192,7 +192,7 @@ writer — is **verified-unsafe** on whole-file `flock`, for two compounding rea
 
 Together these are a real (rare) silent-stale-read / stale-commit corruption window, and there is no
 event-loop-safe way to close it without byte-range locks. So v1 ships the provably-correct
-serialized protocol instead. The cost is concurrency: **one accessor at a time** — a reader excludes
+serialized protocol instead. The cost is concurrency: **one accessor at a time**; a reader excludes
 other readers _and_ writers for as long as it holds the file. True concurrent readers are v2
 (below).
 
@@ -200,15 +200,15 @@ All lock calls are non-blocking, so there is no OS deadlock; a contending caller
 `SqliteBusyError`. A `busyTimeout` open option (milliseconds) lets SQLite block-and-retry the
 contended lock instead of failing immediately. On POSIX it also covers `openDatabase` itself; on
 Windows, file locks are mandatory rather than advisory, so a peer's lock makes the open-time header
-read fail _before_ the timeout can apply — there a multi-process caller must wrap `openDatabase` in
+read fail _before_ the timeout can apply; there a multi-process caller must wrap `openDatabase` in
 a `SqliteBusyError` retry loop.
 
 ---
 
-## Mode 2 — WAL under exclusive locking (DEC-003, DEC-010)
+## Mode 2: WAL under exclusive locking (DEC-003, DEC-010)
 
 WAL normally needs a memory-mapped `-shm` wal-index and byte-range `fcntl` for cross-process
-coordination — neither available from Deno userland. SQLite's exclusive-locking mode runs WAL with
+coordination. Neither is available from Deno userland. SQLite's exclusive-locking mode runs WAL with
 the wal-index in **heap memory** instead, which needs only the whole-file exclusive lock Deno
 already has. This is exactly what the official `sqlite-wasm` does, and it covers the dominant Deno
 shape: one long-running server process owning its database.
@@ -216,7 +216,7 @@ shape: one long-running server process owning its database.
 The pragma order is load-bearing: **`PRAGMA locking_mode=EXCLUSIVE` must be set _before_
 `journal_mode=WAL`.** With exclusive mode set first, `journal_mode=WAL` returns `"wal"`, a `-wal`
 file is created, **no `-shm` file is created, and the shared-memory methods (`xShm*`) are never
-called**. If WAL is requested _without_ exclusive mode first, it **fails closed** — SQLite returns
+called**. If WAL is requested _without_ exclusive mode first, it **fails closed**: SQLite returns
 `"delete"` (no WAL, no crash, no corruption) because the VFS has no shm.
 
 ```mermaid
@@ -248,7 +248,7 @@ sequenceDiagram
 There is **no journal-unlink commit point** in WAL; the commit is the synced commit frame inside the
 `-wal`. On reopen, SQLite runs WAL recovery: it validates the 32-byte `-wal` header (magic, two
 salts), scans the frame headers from offset 32, recomputes the running checksum, and stops at the
-first frame that fails its checksum or salt — recovering to the last valid commit frame. A torn
+first frame that fails its checksum or salt, recovering to the last valid commit frame. A torn
 final frame fails its checksum and is dropped, leaving the last durably-committed state. The heap
 wal-index is rebuilt by that same scan; there is no `-shm` to rebuild from.
 
@@ -265,10 +265,10 @@ The crash-sim VFS models on-disk storage as an ordered per-file write-log plus s
 "crash" at any point, it reconstructs a plausible post-crash disk image under these rules:
 
 - **Synced data is durable and must survive.** Any byte covered by a write that preceded a
-  successful `xSync` is present and exact — dropping it would model a broken disk, not a power loss.
+  successful `xSync` is present and exact; dropping it would model a broken disk, not a power loss.
 - **Unsynced writes may be dropped, applied, reordered, or torn** in any per-record combination.
 - **Tearing granularity is the sector (4096).** Because the VFS advertises no `POWERSAFE_OVERWRITE`,
-  a touched-but-unsynced sector may be scrambled to an arbitrary hostile value — including bytes the
+  a touched-but-unsynced sector may be scrambled to an arbitrary hostile value, including bytes the
   write wasn't even touching. That is exactly what "no powersafe overwrite" means.
 - **Directory-entry existence is a separately, independently droppable fact**, made durable only by
   a directory sync.
@@ -276,16 +276,16 @@ The crash-sim VFS models on-disk storage as an ordered per-file write-log plus s
 At each crash point, the harness reopens the reconstructed image through the _real_ VFS and asserts
 two invariants:
 
-- **I1 — integrity:** `PRAGMA integrity_check` returns exactly `ok`, always, in every mode and at
+- **I1, integrity:** `PRAGMA integrity_check` returns exactly `ok`, always, in every mode and at
   every durability level.
-- **I2 — atomicity/durability:** every transaction that returned a successful `COMMIT` is fully
+- **I2, atomicity/durability:** every transaction that returned a successful `COMMIT` is fully
   present; every uncommitted transaction is fully absent; nothing is partially applied. The
   committed set is tracked by the workload driver, never guessed.
 
 ### The negative control
 
 A crash harness that only ever passes proves nothing. So the same sweep also runs against a
-deliberately broken VFS whose `xSync` is a no-op — a sync that lies. With no real barrier, the
+deliberately broken VFS whose `xSync` is a no-op, a sync that lies. With no real barrier, the
 reconstructions _must_ fail I1 or I2, and the harness asserts that the failure is detected. This is
 the rule we hold most firmly: a mode ships only after its harness is green _and_ its negative
 control is proven to bite.
@@ -294,7 +294,7 @@ control is proven to bite.
 
 **Commit durability is separate from integrity.** Every mode and every durability level stays
 corruption-free across modeled power loss (`integrity_check` is always `ok`). The only thing that
-varies is whether the _latest committed_ transaction survives a power cut — the `durability` option:
+varies is whether the _latest committed_ transaction survives a power cut, controlled by the `durability` option:
 
 | Mode (option)        | Default `durability` | What the default means                                                                                 |
 | -------------------- | -------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -305,7 +305,7 @@ Two real defects were caught _because_ the harness had teeth:
 
 - **The zombie hot journal (BUG-001).** In DELETE journal mode, a committed transaction could be
   silently lost after a power cut: the journal's deletion wasn't durable, so a reopen resurrected a
-  "zombie" hot journal and rolled the committed pages back — with `integrity_check` still `ok`. The
+  "zombie" hot journal and rolled the committed pages back, with `integrity_check` still `ok`. The
   _first_ diagnosed root cause ("Deno can't fsync a directory") was **wrong**: a 30-second `strace`
   probe showed `Deno.openSync(dir).syncSync()` _is_ a directory fsync; the VFS simply wasn't issuing
   it. The fix: default to `journal_mode=PERSIST` (durable via a file-content sync, no directory
@@ -329,12 +329,12 @@ earns its keep by failing.
 - **On Windows, the directory fsync is a no-op (DEC-013).** Win32 `FlushFileBuffers` rejects
   directory handles by design, so issuing it would make every durable create fail; the VFS skips it
   on Windows, mirroring SQLite's own `os_win.c` (which flushes only files, never directories).
-  Windows dentry durability rests on NTFS metadata journaling — the same property native SQLite
+  Windows dentry durability rests on NTFS metadata journaling, the same property native SQLite
   relies on there.
 - **The durability claim is Linux-only.** Windows fsync semantics are unverified (the Windows rig
   proves functional correctness and locking, not the power-loss durability claim). NFS and other
   networked filesystems are explicitly unsupported, the same as native SQLite.
-- **The crash proofs are model-bounded** — a worst-legal-device power-loss model plus `strace`-
+- **The crash proofs are model-bounded**: a worst-legal-device power-loss model plus `strace`-
   verified primitives, not real-hardware power-cut testing. A hardware rig is a later
   release-hardening layer.
 
@@ -349,14 +349,14 @@ The reasoning is that trust should anchor to the bytes the world already runs:
 
 - **Trust anchor.** Provenance-verifying against the SQLite team's signed release anchors trust to
   their artifact. Self-building would anchor it to _our_ toolchain being honest instead.
-- **Trust surface.** Self-building doesn't shrink the surface, it _swaps_ it — removing SQLite's
+- **Trust surface.** Self-building doesn't shrink the surface, it _swaps_ it, removing SQLite's
   tightly-controlled build and adding the entire emscripten / LLVM / binaryen stack to pin and
   trust.
 - **Divergence.** Self-building ships bytes nobody else runs.
 
 The verification is executable: `build/verify-build.sh` transiently re-fetches the pinned npm
 tarball, checks its shasum, extracts, and byte-compares `sqlite3.{wasm,mjs}` against the committed
-copies. A mismatch fails. The fetch is the _only_ network access and happens only here — never at
+copies. A mismatch fails. The fetch is the _only_ network access and happens only here, never at
 install or runtime. See [`WASM_VENDOR.md`](./WASM_VENDOR.md) for the pin and the one-command check.
 
 ---
@@ -367,10 +367,10 @@ Both a faithful Mode 1 ladder and multi-process WAL are gated on one self-contai
 contribution: byte-range `fcntl(F_OFD_SETLK)` advisory locking (plus `mmap` for a real `-shm`), as a
 PR to Deno's `ext/io/fs.rs`. With byte-range locking in Deno core:
 
-- **Mode 1** gets the faithful three-byte-range ladder — restoring true concurrent readers ("many
+- **Mode 1** gets the faithful three-byte-range ladder, restoring true concurrent readers ("many
   readers XOR one writer"), since independent ranges make a failed acquisition leave the prior lock
   intact, eliminating the non-atomic-upgrade hazard entirely.
 - **WAL becomes multi-process** via real shared-memory methods over an mmap'd `-shm`.
 
-The byte-range `fcntl` work is itself an on-mission contribution to the Deno ecosystem — help on
+The byte-range `fcntl` work is itself an on-mission contribution to the Deno ecosystem; help on
 that front is very welcome.

@@ -1,7 +1,7 @@
 # Vendored SQLite WASM artifact
 
 > **We ship the exact official `@sqlite.org/sqlite-wasm`, vendored in-package, pinned and verifiable
-> byte-for-byte.** No runtime download, no first-run fetch, and no self-compile — trust anchors to
+> byte-for-byte.** No runtime download, no first-run fetch, and no self-compile. Trust anchors to
 > the SQLite team's signed release, the bytes the world already runs.
 
 `src/wasm/sqlite3.wasm` and `src/wasm/sqlite3.mjs` are committed, third-party build outputs from the
@@ -23,7 +23,7 @@ was honest:
 
 - **Trust anchor.** Verifying against the official, signed release anchors trust to the bytes
   everyone else runs. A self-compile would anchor it to _our_ build pipeline instead.
-- **Trust surface.** Self-building doesn't shrink the surface, it _swaps_ it — removing SQLite's
+- **Trust surface.** Self-building doesn't shrink the surface, it _swaps_ it, removing SQLite's
   tightly-controlled `ext/wasm` build and adding the entire emscripten / LLVM / binaryen stack to
   pin and trust.
 - **Divergence.** A self-compile ships bytes nobody else runs. No compile-time option this package
@@ -60,6 +60,6 @@ bash build/verify-build.sh
 ```
 
 The fetch is the **only** network access and happens only here, scoped to `registry.npmjs.org`. The
-package itself never fetches anything at install or runtime — `deno.json` and `deno.lock` carry no
+package itself never fetches anything at install or runtime; `deno.json` and `deno.lock` carry no
 npm specifier, and the glue is imported by relative path. A mismatch on either the tarball shasum or
 the per-file byte comparison fails the check with a typed `ProvenanceError` naming the reason.
