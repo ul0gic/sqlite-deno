@@ -3,6 +3,8 @@ import { openDatabaseWithVfs } from "../../src/database.ts";
 import type { CrashRecorder } from "./crash-vfs.ts";
 import type { Op } from "./oplog.ts";
 import type { Synchronous } from "./workload.ts";
+import type { ShapeStmt, WorkloadPlan } from "./workload-shape.ts";
+import { buildWorkloadPlan } from "./workload-shape.ts";
 import { isWal } from "./wal-format.ts";
 
 export interface WalCommit {
@@ -23,6 +25,16 @@ export interface WalWorkloadSpec {
   readonly rowsPerTxn: number;
   readonly dbName: string;
   readonly synchronous: Synchronous;
+  /**
+   * When set, mixes the same seeded property-generated op space the rollback
+   * sweep uses (`workload-shape.ts` — a hostile auxiliary table touched by
+   * UPDATE/DELETE inside each marker txn, plus VACUUM between txns) on top of the
+   * `kv` marker inserts. `kv` stays the durable witness the WAL I2 oracle reads
+   * back, so the committed-set invariant remains checkable while the WAL sweep
+   * covers more than sequential single-column inserts. VACUUM-in-WAL must engage
+   * through our VFS with no `-shm` and `iVersion==1` (DEC-010).
+   */
+  readonly shapeSeed?: number;
 }
 
 export type WalCommitSink = (value: number) => void;
@@ -45,8 +57,19 @@ export interface WalWorkloadDriver {
   ) => void;
 }
 
+const planFor = (spec: WalWorkloadSpec): WorkloadPlan | undefined =>
+  spec.shapeSeed === undefined ? undefined : buildWorkloadPlan(spec.shapeSeed);
+
+type EngineDb = InstanceType<Sqlite3["oo1"]["DB"]>;
+
+const runEngineStmt = (db: EngineDb, stmt: ShapeStmt): void => {
+  if (stmt.kind === "exec") db.exec(stmt.sql);
+  else db.exec({ sql: stmt.sql, bind: [...stmt.params] });
+};
+
 const writeViaEngine: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onCommit) => {
   const db = new sqlite3.oo1.DB(spec.dbName, "c", recorder.name);
+  const plan = planFor(spec);
   try {
     db.exec("PRAGMA locking_mode=EXCLUSIVE");
     const mode = db.selectValue("PRAGMA journal_mode=WAL");
@@ -54,12 +77,15 @@ const writeViaEngine: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onC
     db.exec(`PRAGMA synchronous=${spec.synchronous}`);
     db.exec("PRAGMA wal_autocheckpoint=0");
     db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
+    if (plan) { for (const s of plan.setup) runEngineStmt(db, s); }
     let value = 1;
     for (let t = 0; t < spec.txns; t++) {
+      if (plan) { for (const s of plan.betweenTxn(t)) runEngineStmt(db, s); }
       db.exec("BEGIN");
       for (let r = 0; r < spec.rowsPerTxn; r++) {
         db.exec({ sql: "INSERT INTO kv(v) VALUES ($v)", bind: { $v: value } });
       }
+      if (plan) { for (const s of plan.perTxn(t)) runEngineStmt(db, s); }
       db.exec("COMMIT");
       onCommit(value);
       value++;
@@ -71,6 +97,17 @@ const writeViaEngine: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onC
 
 const durabilityOf = (sync: Synchronous): "normal" | "full" =>
   sync === "NORMAL" ? "normal" : "full";
+
+type PublicDb = ReturnType<typeof openDatabaseWithVfs>;
+
+const runPublicStmt = (db: PublicDb, stmt: ShapeStmt): void => {
+  if (stmt.kind === "exec") {
+    db.exec(stmt.sql);
+    return;
+  }
+  using prepared = db.prepare(stmt.sql);
+  prepared.run(...stmt.params);
+};
 
 const writeViaPublicApi: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, onCommit) => {
   using db = openDatabaseWithVfs(sqlite3, spec.dbName, recorder.name, {
@@ -85,11 +122,15 @@ const writeViaPublicApi: WalWorkloadDriver["write"] = (sqlite3, recorder, spec, 
   }
   db.exec("PRAGMA wal_autocheckpoint=0");
   db.exec("CREATE TABLE kv(id INTEGER PRIMARY KEY, v INTEGER NOT NULL)");
+  const plan = planFor(spec);
+  if (plan) { for (const s of plan.setup) runPublicStmt(db, s); }
   const insert = db.prepare("INSERT INTO kv(v) VALUES (?)");
   let value = 1;
   for (let t = 0; t < spec.txns; t++) {
+    if (plan) { for (const s of plan.betweenTxn(t)) runPublicStmt(db, s); }
     const tx = db.transaction();
     for (let r = 0; r < spec.rowsPerTxn; r++) insert.run(value);
+    if (plan) { for (const s of plan.perTxn(t)) runPublicStmt(db, s); }
     tx.commit();
     onCommit(value);
     value++;

@@ -12,6 +12,7 @@ export const TXNS = SOAK ? 8 : 4;
 export const ROWS_PER_TXN = SOAK ? 4 : 2;
 export const RECON_PER_POINT = SOAK ? 8 : WAL_VARIANTS.length;
 export const CKPT_RECON = SOAK ? 8 : 6;
+export const SHAPE_SEED = 0x5ca1ab1e;
 
 export const withCrashVfs = async <T>(
   vfsName: string,

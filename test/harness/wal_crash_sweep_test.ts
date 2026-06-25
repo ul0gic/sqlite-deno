@@ -12,6 +12,7 @@ import {
   RECON_PER_POINT,
   ROWS_PER_TXN,
   SEEDS,
+  SHAPE_SEED,
   TXNS,
   withCrashVfs,
 } from "./wal-sweep-fixtures.ts";
@@ -63,6 +64,63 @@ Deno.test("WAL crash sweep at synchronous=NORMAL: integrity-safe, trailing-unsyn
         res.failures.length,
         0,
         `seed ${seed}: ${res.failures.length} failures at NORMAL (only durable commits required present):\n${
+          fmtFailures(res.failures)
+        }`,
+      );
+    }
+  });
+});
+
+Deno.test("WAL crash sweep at synchronous=FULL, SHAPED workload (hostile aux rows, UPDATE/DELETE in-txn, VACUUM between): every crash point keeps committed kv markers and integrity (I1+I2+I3)", async () => {
+  await withCrashVfs("wal-sweep-full-shaped", true, async (sqlite3, recorder, dir) => {
+    for (const seed of SEEDS) {
+      const res = await runWalSweep(sqlite3, recorder, dir, {
+        spec: {
+          txns: TXNS,
+          rowsPerTxn: ROWS_PER_TXN,
+          dbName: "/wal-full-shaped.db",
+          synchronous: "FULL",
+          shapeSeed: (SHAPE_SEED ^ seed) >>> 0,
+        },
+        seed,
+        reconstructionsPerPoint: RECON_PER_POINT,
+      });
+      assert(res.crashPoints > 20, `seed ${seed} swept too few crash points: ${res.crashPoints}`);
+      assertEquals(
+        res.shmObserved,
+        false,
+        "I3: a shaped reconstruction materialized a -shm (VACUUM-in-WAL must not create one)",
+      );
+      assertEquals(
+        res.failures.length,
+        0,
+        `seed ${seed}: ${res.failures.length} I1/I2/I3 failures across ${res.reconstructions} shaped reconstructions (VACUUM/UPDATE/DELETE around the kv markers must lose nothing and stay corruption-free):\n${
+          fmtFailures(res.failures)
+        }`,
+      );
+    }
+  });
+});
+
+Deno.test("WAL crash sweep at synchronous=NORMAL, SHAPED workload: integrity-safe over VACUUM/UPDATE/DELETE, trailing-unsynced commits may be absent (no I2 violation)", async () => {
+  await withCrashVfs("wal-sweep-normal-shaped", true, async (sqlite3, recorder, dir) => {
+    for (const seed of SEEDS) {
+      const res = await runWalSweep(sqlite3, recorder, dir, {
+        spec: {
+          txns: TXNS,
+          rowsPerTxn: ROWS_PER_TXN,
+          dbName: "/wal-normal-shaped.db",
+          synchronous: "NORMAL",
+          shapeSeed: (SHAPE_SEED ^ seed) >>> 0,
+        },
+        seed,
+        reconstructionsPerPoint: RECON_PER_POINT,
+      });
+      assertEquals(res.shmObserved, false, "I3: shaped NORMAL run materialized a -shm");
+      assertEquals(
+        res.failures.length,
+        0,
+        `seed ${seed}: ${res.failures.length} failures at NORMAL with the shaped workload (only -wal-sync-covered commits required present):\n${
           fmtFailures(res.failures)
         }`,
       );
