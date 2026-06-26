@@ -1,0 +1,6 @@
+# Normalize all text to LF on commit and checkout, on every platform.
+# Prevents CRLF churn from Windows dev checkouts blowing up deno fmt/lint on Linux.
+* text=auto eol=lf
+
+# Vendored binary artifact — never normalize.
+*.wasm binary
